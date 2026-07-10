@@ -146,7 +146,7 @@ export const memories = pgTable(
     dailyUseDate: date("daily_use_date"),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     cooldownUntil: timestamp("cooldown_until", { withTimezone: true }),
-    // pgvector is enabled now; the MVP ranks text and tags until an embedding endpoint is configured.
+    // pgvector column reserved; MVP ranks text and tags until an embedding endpoint is configured.
     embedding: vector("embedding", { dimensions: 1536 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

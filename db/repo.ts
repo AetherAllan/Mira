@@ -816,10 +816,10 @@ export async function applyDailyReflectionTransaction(input: {
     })),
   );
 
-  // neon-http cannot run callback transactions. One CTE statement gives the
-  // daily reflection a single commit boundary. Locking and comparing the full
-  // state prevents a separate Railway cron process from overwriting an
-  // interaction that committed while the reflection LLM call was running.
+  // One CTE statement gives the daily reflection a single commit boundary.
+  // Locking and comparing the full state prevents a separate Railway cron
+  // process from overwriting an interaction that committed while the
+  // reflection LLM call was running.
   const result = await getDb().execute(sql`
     WITH locked_state AS MATERIALIZED (
       SELECT id
@@ -936,7 +936,7 @@ export async function applyDailyReflectionTransaction(input: {
       EXISTS (SELECT 1 FROM inserted_journal) AS created,
       EXISTS (SELECT 1 FROM locked_state) AS state_matched
   `);
-  const status = result.rows[0] as
+  const status = result[0] as
     | { created?: boolean; state_matched?: boolean }
     | undefined;
   const created = Boolean(status?.created);

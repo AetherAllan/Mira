@@ -1,8 +1,9 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle, type NeonHttpDatabase } from "drizzle-orm/neon-http";
+import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import * as schema from "@/db/schema";
 
-let database: NeonHttpDatabase<typeof schema> | undefined;
+let database: PostgresJsDatabase<typeof schema> | undefined;
+let client: ReturnType<typeof postgres> | undefined;
 
 export function getDb() {
   if (database) return database;
@@ -10,6 +11,12 @@ export function getDb() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not configured");
 
-  database = drizzle({ client: neon(url), schema });
+  // Railway private network and TCP proxy both work without TLS for this stack.
+  client = postgres(url, {
+    max: 10,
+    prepare: false,
+    ssl: url.includes(".railway.internal") || url.includes("proxy.rlwy.net") ? false : undefined,
+  });
+  database = drizzle(client, { schema });
   return database;
 }

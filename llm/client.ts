@@ -45,29 +45,35 @@ export async function callJson<T>({
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "https://mira.local",
+        "HTTP-Referer": process.env.RAILWAY_PUBLIC_DOMAIN
+          ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+          : process.env.NEXT_PUBLIC_APP_URL ?? "https://mira.local",
         "X-Title": "Mira",
       },
       body: JSON.stringify({
-        model,
+        model: process.env.MODEL?.trim() || model,
         messages,
         temperature,
         max_tokens: maxTokens,
         response_format: { type: "json_object" },
+        // ponytail: Nemotron defaults to thinking; effort none kills the latency tax
+        reasoning: { effort: "none" },
       }),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(45_000),
     });
 
+    const body = (await response.json()) as ChatCompletionResponse & {
+      error?: { message?: string };
+    };
     if (!response.ok) {
       return {
         data: fallback,
         raw: null,
         usedFallback: true,
-        error: `OpenRouter returned ${response.status}`,
+        error: body.error?.message || `OpenRouter returned ${response.status}`,
       };
     }
 
-    const body = (await response.json()) as ChatCompletionResponse;
     const content = body.choices?.[0]?.message?.content;
     if (!content) {
       return { data: fallback, raw: null, usedFallback: true, error: "OpenRouter returned no content" };
