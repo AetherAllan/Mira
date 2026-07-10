@@ -40,6 +40,7 @@ import {
   computeProactiveScore,
   computeRepetitionScore,
   computeTopicEntropy,
+  isEchoReply,
 } from "@/core/metrics";
 import { hoursSince, isQuietHours, zonedDateKey } from "@/lib/time";
 import { act } from "@/psyche/actor";
@@ -259,12 +260,39 @@ function composeToolResult(message: string, execution: ToolExecution | null): st
 // The Actor output goes straight out. Crisis handling still short-circuits earlier,
 // and tool names remain constrained by the registry.
 async function runActor(input: Parameters<typeof act>[0]): Promise<ActorResult> {
-  const firstActor = await act(input);
-  const toolExecution = firstActor.output.toolCall ? await executeTool(firstActor.output.toolCall) : null;
+  const recentAssistant = (input.recentMessages ?? [])
+    .filter((item) => item.role === "assistant")
+    .map((item) => item.text);
+
+  let actor = await act(input);
+  if (isEchoReply(actor.output.message, recentAssistant)) {
+    actor = await act({
+      ...input,
+      cooldownWarnings: [
+        ...input.cooldownWarnings,
+        "FORBIDDEN: do not reuse any prior coding/bot/接口 reply. Answer only the latest user message.",
+      ],
+    });
+  }
+  // ponytail: if the model still echoes, refuse to send the loop — acknowledge the user text instead
+  if (isEchoReply(actor.output.message, recentAssistant)) {
+    const tip = (input.userMessage ?? "").trim().slice(0, 80) || "你刚说的那句";
+    actor = {
+      ...actor,
+      output: {
+        ...actor.output,
+        message: `嗯，我听到了：${tip}\n你希望我现在问你哪一块？`,
+        toolCall: null,
+      },
+      raw: actor.raw,
+    };
+  }
+
+  const toolExecution = actor.output.toolCall ? await executeTool(actor.output.toolCall) : null;
   return {
-    finalText: composeToolResult(firstActor.output.message, toolExecution),
-    actorOutput: firstActor.output,
-    actorRaw: firstActor.raw,
+    finalText: composeToolResult(actor.output.message, toolExecution),
+    actorOutput: actor.output,
+    actorRaw: actor.raw,
     toolExecution,
   };
 }
@@ -369,7 +397,7 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
     chatId: message.chatId,
     processingStatus: "received",
   });
-  if (!userMessage.created && await findAssistantReply(
+  if (await findAssistantReply(
     context.companion.id,
     message.chatId,
     message.messageId,

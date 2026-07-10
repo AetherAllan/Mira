@@ -70,6 +70,34 @@ export function computeRepetitionScore(messages: MessageLike[]): number {
   return Math.min(1, keywordSimilarity * 0.7 + repeatedOpeningShare * 0.3);
 }
 
+/** True when candidate is the same reply (or near-copy) of a recent assistant message. */
+export function isEchoReply(candidate: string, previous: string[]): boolean {
+  const linesOf = (value: string) =>
+    value
+      .replace(/\\n/g, "\n")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  const norm = (value: string) => linesOf(value).join("").toLocaleLowerCase();
+  const compact = norm(candidate);
+  if (compact.length < 8) return false;
+  const opening = (linesOf(candidate)[0] ?? "").toLocaleLowerCase();
+
+  for (const prev of previous) {
+    const other = norm(prev);
+    if (!other) continue;
+    if (compact === other) return true;
+    if (compact.length > 12 && other.length > 12 && (compact.includes(other) || other.includes(compact))) {
+      return true;
+    }
+    const prevOpening = (linesOf(prev)[0] ?? "").toLocaleLowerCase();
+    // Same cold open as a recent bubble thread = still an echo, even with a new coda.
+    if (opening.length >= 4 && opening === prevOpening) return true;
+    if (jaccard(tokens(candidate), tokens(prev)) >= 0.55) return true;
+  }
+  return false;
+}
+
 export function computeMirrorIndex(userTopics: string[], proactiveTopics: string[]): number {
   return jaccard(new Set(userTopics), new Set(proactiveTopics));
 }

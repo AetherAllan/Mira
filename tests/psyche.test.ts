@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isEchoReply } from "@/core/metrics";
 import type { DailyReflection, SeedCard } from "@/core/types";
 import { detectCrisis } from "@/psyche/analyzer";
 import { applyDailyReflection } from "@/psyche/growthEngine";
@@ -18,7 +19,20 @@ test("telegram bubbles split on real and literal newlines", () => {
   assert.deepEqual(splitTelegramBubbles("嗨\\n先歇一下"), ["嗨", "先歇一下"]);
   assert.deepEqual(splitTelegramBubbles("单条"), ["单条"]);
   assert.deepEqual(splitTelegramBubbles("a\n\n\nb"), ["a", "b"]);
-  assert.deepEqual(splitTelegramBubbles("1\n2\n3\n4\n5\n6\n7", 5), ["1", "2", "3", "4", "5\n6\n7"]);
+  assert.deepEqual(splitTelegramBubbles("1\n2\n3\n4"), ["1", "2", "3", "4"]);
+});
+
+test("echo detector catches repeated assistant replies", () => {
+  const prev = ["写代码啊\n刚好卡在个接口逻辑\n你这功能是想让机器人主动提醒\n还是只在被@的时候回？"];
+  assert.equal(isEchoReply(prev[0]!, prev), true);
+  assert.equal(
+    isEchoReply(
+      "写代码啊\n刚好卡在个接口逻辑\n你这功能是想让机器人主动提醒\n还是只在被@的时候回？\n（等你回我，我接着捋异常链路）",
+      prev,
+    ),
+    true,
+  );
+  assert.equal(isEchoReply("喝酒？\n那先干一杯", prev), false);
 });
 
 test("daily reflection hard-clamps trait drift to 0.01", () => {

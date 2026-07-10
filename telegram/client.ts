@@ -6,16 +6,13 @@ interface TelegramApiResponse {
 
 /** Each non-empty line becomes its own Telegram bubble.
  * Accepts real newlines and literal "\\n" (models often emit the latter in JSON). */
-export function splitTelegramBubbles(text: string, maxParts = 5): string[] {
-  const lines = text
+export function splitTelegramBubbles(text: string): string[] {
+  return text
     .replace(/\\n/g, "\n")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => line.slice(0, 4096));
-  if (lines.length <= maxParts) return lines;
-  // ponytail: merge overflow into last bubble so a chatty model can't stall the webhook
-  return [...lines.slice(0, maxParts - 1), lines.slice(maxParts - 1).join("\n")];
 }
 
 async function sendOne(token: string, chatId: string, text: string): Promise<{
@@ -46,10 +43,8 @@ export async function sendTelegramMessage(chatId: string, text: string): Promise
 
   try {
     let last: { messageId: number | null; raw: TelegramApiResponse } | null = null;
-    for (let i = 0; i < bubbles.length; i++) {
-      last = await sendOne(token, chatId, bubbles[i]!);
-      // ponytail: fixed gap; jitter if Telegram rate-limits start biting
-      if (i < bubbles.length - 1) await new Promise((r) => setTimeout(r, 350));
+    for (const bubble of bubbles) {
+      last = await sendOne(token, chatId, bubble);
     }
     return { messageId: last!.messageId, raw: last!.raw, parts: bubbles.length };
   } catch (error) {
