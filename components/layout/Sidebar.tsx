@@ -96,10 +96,9 @@ export function Sidebar({ mobile = false, onClose }: SidebarProps) {
             Mira runtime
             <span className="ml-auto font-mono text-[9px] text-zinc-600">v0.1</span>
           </div>
-          <p className="mt-1 font-mono text-[9px] text-zinc-700">WEBHOOK · SERVERLESS · NEON</p>
+          <p className="mt-1 font-mono text-[9px] text-zinc-700">WEBHOOK · RAILWAY · NEON</p>
         </div>
       </div>
     </aside>
   );
 }
-

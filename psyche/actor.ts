@@ -99,7 +99,7 @@ export async function act(input: ActorPromptInput) {
     fallback,
     validate: (value) => validateActor(value, input),
     model: input.config.model,
-    temperature: input.rewriteInstruction ? 0.25 : 0.65,
+    temperature: 0.65,
     maxTokens: 950,
   });
   return { output: result.data, raw: result.raw, usedFallback: result.usedFallback, error: result.error };

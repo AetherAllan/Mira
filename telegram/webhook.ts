@@ -22,7 +22,16 @@ export interface TelegramTextMessage {
 export function parseTelegramTextMessage(update: TelegramUpdate): TelegramTextMessage | null {
   const message = update.message;
   const text = message?.text?.trim();
-  if (!message || !text || message.message_id === undefined || message.chat?.id === undefined || message.from?.id === undefined) {
+  // Mira is a single-user companion. Restricting the MVP to private chats also
+  // makes Telegram's per-chat message_id safe for the database idempotency key.
+  if (
+    !message ||
+    message.chat?.type !== "private" ||
+    !text ||
+    message.message_id === undefined ||
+    message.chat.id === undefined ||
+    message.from?.id === undefined
+  ) {
     return null;
   }
   const displayName =

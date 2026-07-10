@@ -19,13 +19,16 @@ import type {
   MessageRole,
   RuntimeConfig,
   SeedCard,
-  TopicEntropy,
 } from "@/core/types";
+import {
+  computeMirrorIndex,
+  computeRepetitionScore,
+  computeTopicEntropy,
+} from "@/core/metrics";
 import { getDb } from "@/db/client";
 import {
   companions,
   companionStates,
-  criticReviews,
   events,
   eventSeeds,
   internalJournals,
@@ -40,12 +43,12 @@ import {
 } from "@/db/schema";
 import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
 import { DEFAULT_SEED_CARDS } from "@/seed/seedCards";
+import { isValidTimeZone } from "@/lib/time";
 
 type NewMessage = Omit<typeof messages.$inferInsert, "id" | "createdAt">;
 type NewAnnotation = Omit<typeof messageAnnotations.$inferInsert, "id" | "createdAt">;
 type NewEvent = Omit<typeof events.$inferInsert, "id" | "createdAt">;
 type NewStateChange = Omit<typeof stateChanges.$inferInsert, "id" | "createdAt">;
-type NewCriticReview = Omit<typeof criticReviews.$inferInsert, "id" | "createdAt">;
 type NewToolCall = Omit<typeof toolCalls.$inferInsert, "id" | "createdAt">;
 type NewProactiveLog = Omit<typeof proactiveLogs.$inferInsert, "id" | "createdAt">;
 type NewJournal = Omit<typeof internalJournals.$inferInsert, "id" | "createdAt">;
@@ -257,6 +260,16 @@ export async function getRuntimeContext(telegramUserId?: string) {
   return ensureCompanionContext({ telegramUserId });
 }
 
+export async function getCompanionState(companionId: string) {
+  const rows = await getDb()
+    .select()
+    .from(companionStates)
+    .where(eq(companionStates.companionId, companionId))
+    .limit(1);
+  if (!rows[0]) throw new Error("Companion state not found");
+  return stateFromRow(rows[0]);
+}
+
 export async function findMessageByTelegramId(
   companionId: string,
   role: MessageRole,
@@ -291,6 +304,109 @@ export async function createMessage(input: NewMessage) {
   );
   if (!existing) throw new Error("Message insert conflicted but no existing row was found");
   return { row: existing, created: false };
+}
+
+export async function findAssistantReply(
+  companionId: string,
+  chatId: string,
+  telegramMessageId: number,
+) {
+  const rows = await getDb()
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.companionId, companionId),
+        eq(messages.role, "assistant"),
+        eq(messages.chatId, chatId),
+        sql`${messages.rawJson}->>'replyToTelegramMessageId' = ${String(telegramMessageId)}`,
+      ),
+    )
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function claimMessageProcessing(messageId: string) {
+  const staleBefore = new Date(Date.now() - 5 * 60_000);
+  const processingStartedAt = new Date();
+  const rows = await getDb()
+    .update(messages)
+    .set({
+      processingStatus: "processing",
+      processingStartedAt,
+      processingCompletedAt: null,
+    })
+    .where(
+      and(
+        eq(messages.id, messageId),
+        eq(messages.role, "user"),
+        or(
+          isNull(messages.processingStatus),
+          eq(messages.processingStatus, "received"),
+          eq(messages.processingStatus, "failed"),
+          and(
+            eq(messages.processingStatus, "processing"),
+            or(
+              isNull(messages.processingStartedAt),
+              lt(messages.processingStartedAt, staleBefore),
+            ),
+          ),
+        ),
+      ),
+    )
+    .returning();
+  return rows[0] ?? null;
+}
+
+export async function finishMessageProcessing(
+  messageId: string,
+  processingStartedAt: Date,
+  status: "completed" | "failed",
+) {
+  const rows = await getDb()
+    .update(messages)
+    .set({
+      processingStatus: status,
+      processingCompletedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(messages.id, messageId),
+        eq(messages.processingStartedAt, processingStartedAt),
+      ),
+    )
+    .returning();
+  return rows[0] ?? null;
+}
+
+export async function completeMessageProcessing(messageId: string) {
+  const rows = await getDb()
+    .update(messages)
+    .set({
+      processingStatus: "completed",
+      processingCompletedAt: new Date(),
+    })
+    .where(eq(messages.id, messageId))
+    .returning();
+  return rows[0] ?? null;
+}
+
+export async function hasMessageProcessingClaim(
+  messageId: string,
+  processingStartedAt: Date,
+) {
+  const rows = await getDb()
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.id, messageId),
+        eq(messages.processingStatus, "processing"),
+        eq(messages.processingStartedAt, processingStartedAt),
+      ),
+    )
+    .limit(1);
+  return Boolean(rows[0]);
 }
 
 export async function createAnnotation(input: NewAnnotation) {
@@ -503,7 +619,11 @@ export async function setSeedEnabled(id: string, enabled: boolean, companionId?:
   return rows[0] ?? null;
 }
 
-export async function updateCompanionState(companionId: string, state: CompanionState) {
+export async function updateCompanionStateIfCurrent(
+  companionId: string,
+  expected: CompanionState,
+  state: CompanionState,
+) {
   const rows = await getDb()
     .update(companionStates)
     .set({
@@ -514,19 +634,22 @@ export async function updateCompanionState(companionId: string, state: Companion
       activeArcsJson: state.activeArcs,
       updatedAt: new Date(),
     })
-    .where(eq(companionStates.companionId, companionId))
+    .where(
+      and(
+        eq(companionStates.companionId, companionId),
+        sql`${companionStates.traitsJson} = ${JSON.stringify(expected.traits)}::jsonb`,
+        sql`${companionStates.moodJson} = ${JSON.stringify(expected.mood)}::jsonb`,
+        sql`${companionStates.drivesJson} = ${JSON.stringify(expected.drives)}::jsonb`,
+        sql`${companionStates.relationshipJson} = ${JSON.stringify(expected.relationship)}::jsonb`,
+        sql`${companionStates.activeArcsJson} = ${JSON.stringify(expected.activeArcs)}::jsonb`,
+      ),
+    )
     .returning();
-  if (!rows[0]) throw new Error("Companion state not found");
-  return rows[0];
+  return rows[0] ?? null;
 }
 
 export async function createStateChange(input: NewStateChange) {
   const rows = await getDb().insert(stateChanges).values(input).returning();
-  return rows[0];
-}
-
-export async function createCriticReview(input: NewCriticReview) {
-  const rows = await getDb().insert(criticReviews).values(input).returning();
   return rows[0];
 }
 
@@ -592,7 +715,7 @@ export async function getProactiveStats(companionId: string, timeZone = "Asia/To
       .where(
         and(
           eq(proactiveLogs.companionId, companionId),
-          isNotNull(proactiveLogs.sentMessageId),
+          eq(proactiveLogs.shouldSend, true),
           gte(proactiveLogs.createdAt, start),
           lt(proactiveLogs.createdAt, end),
         ),
@@ -603,7 +726,7 @@ export async function getProactiveStats(companionId: string, timeZone = "Asia/To
       .where(
         and(
           eq(proactiveLogs.companionId, companionId),
-          isNotNull(proactiveLogs.sentMessageId),
+          eq(proactiveLogs.shouldSend, true),
         ),
       )
       .orderBy(desc(proactiveLogs.createdAt))
@@ -618,6 +741,18 @@ export async function getProactiveStats(companionId: string, timeZone = "Asia/To
 export async function createProactiveLog(input: NewProactiveLog) {
   const rows = await getDb().insert(proactiveLogs).values(input).returning();
   return rows[0];
+}
+
+export async function updateProactiveLog(
+  id: string,
+  values: Partial<typeof proactiveLogs.$inferInsert>,
+) {
+  const rows = await getDb()
+    .update(proactiveLogs)
+    .set(values)
+    .where(eq(proactiveLogs.id, id))
+    .returning();
+  return rows[0] ?? null;
 }
 
 export async function createInternalJournal(input: NewJournal) {
@@ -655,12 +790,14 @@ export type DailyReflectionChangeInput = {
 
 export async function applyDailyReflectionTransaction(input: {
   journalInput: NewJournal;
+  expectedState: CompanionState;
   state: CompanionState;
   changes: DailyReflectionChangeInput[];
   seeds?: SeedCard[];
   userId?: string;
+  eventPayload?: unknown;
 }) {
-  const { journalInput, state } = input;
+  const { journalInput, expectedState, state } = input;
   const changesJson = JSON.stringify(
     input.changes.map((change) => ({
       ...change,
@@ -680,15 +817,27 @@ export async function applyDailyReflectionTransaction(input: {
   );
 
   // neon-http cannot run callback transactions. One CTE statement gives the
-  // daily reflection a single commit boundary: an existing journal makes every
-  // mutation a no-op; any failure rolls the new journal back with its state.
+  // daily reflection a single commit boundary. Locking and comparing the full
+  // state prevents a separate Railway cron process from overwriting an
+  // interaction that committed while the reflection LLM call was running.
   const result = await getDb().execute(sql`
-    WITH inserted_journal AS (
+    WITH locked_state AS MATERIALIZED (
+      SELECT id
+      FROM companion_states
+      WHERE companion_id = ${journalInput.companionId}::uuid
+        AND traits_json = ${JSON.stringify(expectedState.traits)}::jsonb
+        AND mood_json = ${JSON.stringify(expectedState.mood)}::jsonb
+        AND drives_json = ${JSON.stringify(expectedState.drives)}::jsonb
+        AND relationship_json = ${JSON.stringify(expectedState.relationship)}::jsonb
+        AND active_arcs_json = ${JSON.stringify(expectedState.activeArcs)}::jsonb
+      FOR UPDATE
+    ),
+    inserted_journal AS (
       INSERT INTO internal_journals (
         companion_id, date, summary, reflection,
         trait_updates_json, belief_updates_json, arc_updates_json
       )
-      VALUES (
+      SELECT
         ${journalInput.companionId}::uuid,
         ${journalInput.date}::date,
         ${journalInput.summary},
@@ -696,7 +845,7 @@ export async function applyDailyReflectionTransaction(input: {
         ${JSON.stringify(journalInput.traitUpdatesJson ?? {})}::jsonb,
         ${JSON.stringify(journalInput.beliefUpdatesJson ?? {})}::jsonb,
         ${JSON.stringify(journalInput.arcUpdatesJson ?? [])}::jsonb
-      )
+      WHERE EXISTS (SELECT 1 FROM locked_state)
       ON CONFLICT (companion_id, date) DO NOTHING
       RETURNING id
     ),
@@ -771,13 +920,27 @@ export async function applyDailyReflectionTransaction(input: {
         ${journalInput.companionId}::uuid,
         'daily.reflection',
         'daily_cron',
-        ${JSON.stringify({ date: journalInput.date })}::jsonb
+        ${JSON.stringify({
+          date: journalInput.date,
+          summary: journalInput.summary,
+          reflection: journalInput.reflection,
+          traitUpdates: journalInput.traitUpdatesJson ?? {},
+          arcUpdates: journalInput.arcUpdatesJson ?? [],
+        })}::jsonb
+          || ${JSON.stringify(input.eventPayload ?? {})}::jsonb
+          || jsonb_build_object('journalId', (SELECT id FROM inserted_journal LIMIT 1))
       WHERE EXISTS (SELECT 1 FROM inserted_journal)
       RETURNING id
     )
-    SELECT EXISTS (SELECT 1 FROM inserted_journal) AS created
+    SELECT
+      EXISTS (SELECT 1 FROM inserted_journal) AS created,
+      EXISTS (SELECT 1 FROM locked_state) AS state_matched
   `);
-  const created = Boolean((result.rows[0] as { created?: boolean } | undefined)?.created);
+  const status = result.rows[0] as
+    | { created?: boolean; state_matched?: boolean }
+    | undefined;
+  const created = Boolean(status?.created);
+  const stateMatched = Boolean(status?.state_matched);
   const rows = await getDb()
     .select()
     .from(internalJournals)
@@ -788,8 +951,11 @@ export async function applyDailyReflectionTransaction(input: {
       ),
     )
     .limit(1);
+  if (!rows[0] && !stateMatched) {
+    return { row: null, created: false, conflict: true };
+  }
   if (!rows[0]) throw new Error("Daily reflection transaction did not persist a journal");
-  return { row: rows[0], created };
+  return { row: rows[0], created, conflict: false };
 }
 
 export async function createWorldEvent(input: NewWorldEvent) {
@@ -848,7 +1014,7 @@ export async function listTodayActivity(
   timeZone = "Asia/Tokyo",
 ) {
   const { start, end } = dayBounds(date, timeZone);
-  const [messageRows, annotationRows, worldEventRows, proactiveRows, criticRows] =
+  const [messageRows, annotationRows, worldEventRows, proactiveRows] =
     await Promise.all([
       getDb()
         .select()
@@ -895,25 +1061,12 @@ export async function listTodayActivity(
           ),
         )
         .orderBy(desc(proactiveLogs.createdAt)),
-      getDb()
-        .select({ review: criticReviews, message: messages })
-        .from(criticReviews)
-        .innerJoin(messages, eq(criticReviews.messageId, messages.id))
-        .where(
-          and(
-            eq(messages.companionId, companionId),
-            gte(criticReviews.createdAt, start),
-            lt(criticReviews.createdAt, end),
-          ),
-        )
-        .orderBy(desc(criticReviews.createdAt)),
     ]);
   return {
     messages: messageRows,
     annotations: annotationRows,
     worldEvents: worldEventRows,
     proactiveLogs: proactiveRows,
-    criticReviews: criticRows,
   };
 }
 
@@ -941,13 +1094,8 @@ export async function listAdminMessages(companionId: string, filters: MessageFil
   const ids = messageRows.map(({ message }) => message.id);
   if (ids.length === 0) return [];
 
-  const [annotationRows, reviewRows, callRows] = await Promise.all([
+  const [annotationRows, callRows] = await Promise.all([
     getDb().select().from(messageAnnotations).where(inArray(messageAnnotations.messageId, ids)),
-    getDb()
-      .select()
-      .from(criticReviews)
-      .where(inArray(criticReviews.messageId, ids))
-      .orderBy(desc(criticReviews.createdAt)),
     getDb()
       .select()
       .from(toolCalls)
@@ -955,12 +1103,6 @@ export async function listAdminMessages(companionId: string, filters: MessageFil
       .orderBy(desc(toolCalls.createdAt)),
   ]);
   const annotationByMessage = new Map(annotationRows.map((row) => [row.messageId, row]));
-  const reviewByMessage = new Map<string, (typeof reviewRows)[number]>();
-  for (const review of reviewRows) {
-    if (review.messageId && !reviewByMessage.has(review.messageId)) {
-      reviewByMessage.set(review.messageId, review);
-    }
-  }
   const callsByMessage = new Map<string, typeof callRows>();
   for (const call of callRows) {
     if (!call.messageId) continue;
@@ -983,7 +1125,6 @@ export async function listAdminMessages(companionId: string, filters: MessageFil
             summary: annotation.summary,
           }
         : null,
-      criticReview: reviewByMessage.get(message.id) ?? null,
       toolCalls: callsByMessage.get(message.id) ?? [],
     };
   });
@@ -1065,16 +1206,6 @@ export async function listToolCalls(companionId: string, limit = 100) {
     .limit(clampLimit(limit));
 }
 
-export async function listCriticReviews(companionId: string, limit = 100) {
-  return getDb()
-    .select({ review: criticReviews, message: messages })
-    .from(criticReviews)
-    .leftJoin(messages, eq(criticReviews.messageId, messages.id))
-    .where(or(eq(messages.companionId, companionId), isNull(criticReviews.messageId)))
-    .orderBy(desc(criticReviews.createdAt))
-    .limit(clampLimit(limit));
-}
-
 export async function listInternalJournals(companionId: string, limit = 30) {
   return getDb()
     .select()
@@ -1128,6 +1259,12 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
   const policyPatch = isRecord(patch.policy) ? patch.policy : {};
   const quietPatch = isRecord(policyPatch.quietHours) ? policyPatch.quietHours : {};
   const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const requestedTimeZone = typeof quietPatch.timeZone === "string"
+    ? quietPatch.timeZone.trim()
+    : "";
+  if (requestedTimeZone && !isValidTimeZone(requestedTimeZone)) {
+    throw new Error("Invalid time zone");
+  }
 
   const next: RuntimeConfig = {
     character: {
@@ -1161,8 +1298,8 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
             ? quietPatch.end
             : current.policy.quietHours.end,
         timeZone:
-          typeof quietPatch.timeZone === "string" && quietPatch.timeZone.trim()
-            ? quietPatch.timeZone.trim()
+          requestedTimeZone
+            ? requestedTimeZone
             : current.policy.quietHours.timeZone,
       },
       minimumProactiveIntervalHours: finiteNumber(
@@ -1196,61 +1333,7 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
   return rows[0];
 }
 
-function calculateTopicEntropy(
-  annotations: Array<{ topicsJson: Array<{ name: string; confidence: number }> }>,
-): TopicEntropy {
-  const counts = new Map<string, number>();
-  for (const annotation of annotations) {
-    for (const topic of annotation.topicsJson) {
-      counts.set(topic.name, (counts.get(topic.name) ?? 0) + 1);
-    }
-  }
-  const total = [...counts.values()].reduce((sum, value) => sum + value, 0);
-  const distribution = [...counts.entries()]
-    .map(([topic, value]) => ({ topic, count: value, share: total ? value / total : 0 }))
-    .sort((a, b) => b.count - a.count);
-  const top1Share = distribution[0]?.share ?? 0;
-  const top3Share = distribution.slice(0, 3).reduce((sum, item) => sum + item.share, 0);
-  const maximumEntropy = counts.size > 1 ? Math.log(counts.size) : 1;
-  const shannon = distribution.reduce(
-    (sum, item) => sum - (item.share > 0 ? item.share * Math.log(item.share) : 0),
-    0,
-  );
-  return {
-    entropyScore: counts.size > 1 ? shannon / maximumEntropy : 0,
-    top1Share,
-    top3Share,
-    collapseRisk: top3Share > 0.75,
-    distribution,
-  };
-}
-
-function ngrams(text: string) {
-  const normalized = text.toLowerCase().replace(/\s+/g, "").replace(/[^\p{L}\p{N}]/gu, "");
-  const result = new Set<string>();
-  for (let index = 0; index <= normalized.length - 3; index += 1) {
-    result.add(normalized.slice(index, index + 3));
-  }
-  return result;
-}
-
-function repetitionScore(rows: Array<{ text: string }>) {
-  if (rows.length < 2) return 0;
-  const sets = rows.map((row) => ngrams(row.text));
-  let total = 0;
-  let pairs = 0;
-  for (let left = 0; left < sets.length; left += 1) {
-    for (let right = left + 1; right < sets.length; right += 1) {
-      const union = new Set([...sets[left], ...sets[right]]);
-      const intersection = [...sets[left]].filter((value) => sets[right].has(value)).length;
-      total += union.size ? intersection / union.size : 0;
-      pairs += 1;
-    }
-  }
-  return pairs ? total / pairs : 0;
-}
-
-function calculateMirrorIndex(
+function dashboardMirrorIndex(
   annotations: Array<{
     messageRole: MessageRole;
     topicsJson: Array<{ name: string; confidence: number }>;
@@ -1269,10 +1352,7 @@ function calculateMirrorIndex(
       if (typeof tag === "string") proactiveTags.add(tag);
     }
   }
-  const union = new Set([...userTopics, ...proactiveTags]);
-  if (union.size === 0) return 0;
-  const overlap = [...userTopics].filter((topic) => proactiveTags.has(topic)).length;
-  return overlap / union.size;
+  return computeMirrorIndex([...userTopics], [...proactiveTags]);
 }
 
 function stateSeries(
@@ -1322,11 +1402,11 @@ export async function getDashboardSnapshot() {
     worldEventRows,
     seedRows,
     proactiveRows,
-    criticRows,
     toolRows,
     memoryRows,
     messageCountRows,
     proactiveCountRows,
+    proactiveBudgetCountRows,
     toolCountRows,
     memoryCountRows,
   ] = await Promise.all([
@@ -1339,7 +1419,6 @@ export async function getDashboardSnapshot() {
     listWorldEvents(companionId, 50),
     listSeeds(companionId),
     listProactiveLogs(companionId, 100),
-    listCriticReviews(companionId, 100),
     listToolCalls(companionId, 100),
     listAdminMemories(companionId, { limit: 100 }),
     getDb()
@@ -1359,6 +1438,17 @@ export async function getDashboardSnapshot() {
         and(
           eq(proactiveLogs.companionId, companionId),
           isNotNull(proactiveLogs.sentMessageId),
+          gte(proactiveLogs.createdAt, start),
+          lt(proactiveLogs.createdAt, end),
+        ),
+      ),
+    getDb()
+      .select({ value: count() })
+      .from(proactiveLogs)
+      .where(
+        and(
+          eq(proactiveLogs.companionId, companionId),
+          eq(proactiveLogs.shouldSend, true),
           gte(proactiveLogs.createdAt, start),
           lt(proactiveLogs.createdAt, end),
         ),
@@ -1386,6 +1476,7 @@ export async function getDashboardSnapshot() {
   ]);
 
   const proactiveToday = proactiveCountRows[0]?.value ?? 0;
+  const proactiveBudgetUsed = proactiveBudgetCountRows[0]?.value ?? 0;
   return {
     user: context.user,
     companion: context.companion,
@@ -1393,11 +1484,12 @@ export async function getDashboardSnapshot() {
     stats: {
       todayMessages: messageCountRows[0]?.value ?? 0,
       todayProactive: proactiveToday,
+      todayProactiveReserved: proactiveBudgetUsed,
       todayToolCalls: toolCountRows[0]?.value ?? 0,
       todayMemoryWrites: memoryCountRows[0]?.value ?? 0,
       proactiveRemaining: Math.max(
         0,
-        context.companion.configJson.policy.proactiveMaxPerDay - proactiveToday,
+        context.companion.configJson.policy.proactiveMaxPerDay - proactiveBudgetUsed,
       ),
     },
     recentMessages,
@@ -1414,13 +1506,12 @@ export async function getDashboardSnapshot() {
       "drives",
       context.state.drives as unknown as Record<string, number>,
     ),
-    topicEntropy: calculateTopicEntropy(annotations),
-    repetitionScore: repetitionScore(assistantMessages),
-    mirrorIndex: calculateMirrorIndex(annotations, proactiveRows),
+    topicEntropy: computeTopicEntropy(annotations),
+    repetitionScore: computeRepetitionScore(assistantMessages),
+    mirrorIndex: dashboardMirrorIndex(annotations, proactiveRows),
     worldEvents: worldEventRows,
     seeds: seedRows.map(({ tagsJson, ...seed }) => ({ ...seed, tags: tagsJson })),
     proactiveLogs: proactiveRows,
-    criticReviews: criticRows.map(({ review }) => review),
     toolCalls: toolRows,
     memories: memoryRows,
   };

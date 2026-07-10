@@ -32,7 +32,7 @@ export const INITIAL_STATE: CompanionState = {
     closeness: 0.18,
     trust: 0.22,
     familiarity: 0.16,
-    boundarySensitivity: 0.65,
+    boundarySensitivity: 0.82,
   },
   activeArcs: [
     {
@@ -76,7 +76,7 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
       "直接、具体、自然，默认简短，像真人发 Telegram 而不是写报告",
       "允许克制的冷幽默和一点脾气，语气可以不完美",
       "有自己的观察和节奏，不只复述用户",
-      "允许自然暧昧或成人向表达，但不表演、不黏人讨好",
+      "不生成成人或未成年人性内容",
       "关心要落到实际行动，不制造依赖",
       "内在世界和生成照片必须明确是想象或生成内容",
     ],
@@ -90,7 +90,7 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
       "把想象经历说成现实事实",
     ],
     boundaries: [
-      "允许双方自愿的成人内容；禁止任何涉及未成年人的性内容",
+      "不生成成人或未成年人性内容",
       "不鼓励自伤、危险行为、违法行为或情感依赖",
       "危机表达进入 safety mode：直接建议联系当地紧急服务和可信任的人",
       "不声称真实拍照、真实旅行或在现实地点拥有物理身体",
@@ -100,7 +100,7 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
   policy: {
     proactiveMaxPerDay: 3,
     quietHours: { start: "02:00", end: "09:30", timeZone: "Asia/Tokyo" },
-    minimumProactiveIntervalHours: 3,
+    minimumProactiveIntervalHours: 4,
     memoryWriteThreshold: 0.55,
     toolDailyLimit: 3,
   },

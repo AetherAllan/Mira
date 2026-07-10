@@ -1,193 +1,269 @@
 # Mira
 
-Mira 是一个部署在 Vercel 上的 Telegram-native AI companion runtime。当前 companion 叫 **Mira**。它把对话、选择性记忆、内在世界、主动行为、人格慢变化和审查记录放进同一个可观测运行时，而不是把 Telegram 只当作 ChatGPT 的输入框。
+Mira 是一个运行在 Railway 上的 Telegram-native AI companion 原型。它不是把 ChatGPT 套进 Telegram，而是用一个可观察的 Psyche Engine 管理人格状态、选择性记忆、主动行为、内在世界和缓慢成长。
 
-这是一个可运行的 MVP：复杂决策使用可替换的启发式和 OpenRouter Chat Completions JSON 输出；所有关键决策都会写入 Neon Postgres，Dashboard 可以追踪原因和结果。
+当前实现以“能部署、能解释、能继续扩展”为目标：复杂决策使用启发式和 OpenRouter JSON 输出，外部调用失败时有确定性 fallback。
 
-## 架构
+## Architecture
 
 ```mermaid
 flowchart LR
-  TG[Telegram webhook] --> RT[Psyche runtime]
-  HC[Vercel hourly cron] --> RT
-  DC[Vercel daily cron] --> RF[Daily reflection]
-  RT --> AN[Analyzer]
-  AN --> MEM[Memory]
-  MEM --> ID[Id drives]
-  ID --> EGO[Ego director]
-  EGO --> ACT[Actor]
-  ACT --> TOOL[Allowlisted tools]
-  ACT --> CRIT[Superego critic]
-  CRIT --> TGAPI[Telegram Bot API]
+  TG[Telegram webhook] --> WEB[Railway web service]
+  WEB --> RT[Psyche runtime]
+  HOURLY[Railway hourly cron] --> RT
+  DAILY[Railway daily cron] --> RT
+  RT --> ID[Id / drives]
+  RT --> EGO[Ego / action plan]
+  RT --> ACTOR[Actor]
+  RT --> MEM[Memory / World / Growth]
   RT --> DB[(Neon Postgres + pgvector)]
-  RF --> DB
-  DB --> DASH[Next.js Dashboard]
+  RT --> LLM[OpenRouter Chat Completions]
+  RT --> TG
+  DASH[Dashboard] --> DB
 ```
 
 主要目录：
 
-- `app/api/telegram`：Telegram webhook 入口。
-- `app/api/cron`：每小时主动行为和每日反思。
-- `app/api/admin`：受管理员 cookie 保护的 Dashboard API。
-- `psyche`：Analyzer、Id、Ego、Actor、Critic、Memory、World、Growth 和 Novelty 模块。
-- `core`：流程编排、共享类型、指标和 prompt 组装。
-- `db`：Drizzle schema、Neon client 和数据仓库。
-- `app/dashboard`、`components/dashboard`：人格运行时观测台。
+- `app/`：Next.js App Router 页面、Dashboard 和 Route Handlers。
+- `core/`：消息 runtime、prompt 组装、指标和事件日志。
+- `psyche/`：Analyzer、Id、Ego、Actor、Memory、World、Growth、Novelty。
+- `db/`：Drizzle schema、Neon client 和 repository。
+- `telegram/`：Webhook 解析、鉴权和 Bot API client。
+- `tools/`：只允许调用 registry 中登记的工具；当前只有 mock photo。
+- `scripts/`：数据库、seed、webhook 和 Railway Cron 入口。
+- `drizzle/`：可审查的增量 SQL migrations。
 
-## 本地运行
+## Requirements
 
-要求 Node.js 20.9+，推荐 Node.js 22。
+- Bun 1.3+
+- Node.js 20.9+（Next.js / Railway runtime）
+- Neon Postgres，并启用 pgvector
+- Telegram Bot token
+- OpenRouter API key
+- Railway project
 
-```bash
-npm install
-cp .env.example .env
-npm run db:push
-npm run seed
-npm run dev
-```
+## Environment variables
 
-打开 `http://localhost:3000/login`，使用 `ADMIN_PASSWORD` 登录。
+本地复制 `.env.example` 为 `.env`。Railway Web、hourly cron、daily cron 三个服务需要引用同一组变量。
 
-生产前检查：
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | yes | Telegram Bot API |
+| `TELEGRAM_ALLOWED_USER_ID` | yes | 唯一允许使用 bot 的 Telegram user id |
+| `TELEGRAM_WEBHOOK_SECRET` | yes | 校验 `X-Telegram-Bot-Api-Secret-Token` |
+| `BASE_URL` | no | 默认 `https://openrouter.ai/api/v1`，只在服务端使用 |
+| `API_KEY` | yes | OpenRouter API key |
+| `MODEL` | no | 默认 `openai/gpt-4.1-mini` |
+| `DATABASE_URL` | yes | Neon pooled Postgres URL |
+| `CRON_SECRET` | yes | 保护 HTTP cron routes |
+| `ADMIN_PASSWORD` | yes | Dashboard 登录密码 |
 
-```bash
-npm test
-npm run typecheck
-npm run build
-```
-
-## 环境变量
-
-```dotenv
-# OpenRouter。BASE_URL 是 LLM API 地址，不是站点地址。
-BASE_URL=https://openrouter.ai/api/v1
-API_KEY=your_openrouter_key
-MODEL=openai/gpt-4.1-mini
-
-DATABASE_URL=postgresql://...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_ALLOWED_USER_ID=123456789
-TELEGRAM_WEBHOOK_SECRET=a-long-random-secret
-CRON_SECRET=another-long-random-secret
-ADMIN_PASSWORD=a-strong-dashboard-password
-```
-
-密钥只在 Server Components、Route Handlers 和脚本中读取；不会序列化到客户端。`BASE_URL` 也不会在 Settings 页面返回。
-
-## Neon Postgres 与 Drizzle
-
-1. 在 Neon 创建 Postgres 项目。
-2. 将 pooled connection string 写入 `DATABASE_URL`。
-3. 执行：
+建议生成随机 secret：
 
 ```bash
-npm run db:push
-npm run seed
+openssl rand -hex 32
 ```
 
-`db:push` 会先执行 `CREATE EXTENSION IF NOT EXISTS vector`，再由 Drizzle Kit 同步 schema。`memories.embedding` 已使用 1536 维 pgvector；MVP 在只有 Chat Completions API 的前提下先用文本和 tag 排序，之后接 embedding API 时不需要重做数据模型。
+不要把 `API_KEY`、Bot token、数据库 URL 或密码写入客户端变量，也不要使用 `NEXT_PUBLIC_` 前缀。
 
-查看数据库：
+## Local development
 
 ```bash
-npm run db:studio
+bun install --frozen-lockfile
+bun run db:migrate
+bun run seed
+bun run dev
 ```
 
-修改 schema 后可以运行 `npx drizzle-kit generate` 生成可审查的 SQL migration；原型阶段也可以继续使用 `npm run db:push`。
+打开 [http://localhost:3000](http://localhost:3000)。Dashboard 入口是 `/login`，登录后访问 `/dashboard`。
 
-## 创建 Telegram Bot
-
-1. 在 Telegram 联系 `@BotFather`。
-2. 执行 `/newbot` 并保存 token 到 `TELEGRAM_BOT_TOKEN`。
-3. 给 bot 发一条消息，再通过 Bot API `getUpdates` 或常用 user-info bot 找到自己的数字 user id。
-4. 将该值写入 `TELEGRAM_ALLOWED_USER_ID`。MVP 会拒绝其他用户。
-5. 为 `TELEGRAM_WEBHOOK_SECRET` 生成一个不可猜的随机值。
-
-## 设置 Telegram webhook
-
-应用部署到公开 HTTPS 地址后执行：
+提交前检查：
 
 ```bash
-npm run telegram:set-webhook -- https://your-project.vercel.app
+bun run test
+bun run typecheck
+bun run build
+bunx drizzle-kit check
 ```
 
-脚本会设置：
+## Neon Postgres and pgvector
+
+1. 在 Neon 创建 project/database。
+2. 把 pooled connection string 写入 `DATABASE_URL`。
+3. 运行 migration 和 seed：
+
+```bash
+bun run db:migrate
+bun run seed
+```
+
+`0000_init.sql` 会执行 `CREATE EXTENSION IF NOT EXISTS vector`。已有数据库升级使用增量 migration，不要重写已经执行过的 migration。
+
+开发期如果要让 schema 直接对齐数据库，也可以运行：
+
+```bash
+bun run db:push
+bun run db:studio
+```
+
+`db:push` 适合本地快速迭代；生产环境优先使用可审查的 `db:migrate`。
+
+当前数据库 client 使用 `@neondatabase/serverless` 的 Neon HTTP driver。如果以后改用普通 Railway Postgres，需要同时更换 driver，并确认数据库安装了 pgvector；不能只替换 `DATABASE_URL`。
+
+## Create the Telegram bot
+
+1. 在 Telegram 找 `@BotFather`。
+2. 执行 `/newbot` 并保存 token。
+3. 给 bot 发一条私聊消息。
+4. 通过 Bot API `getUpdates` 或可信工具取得自己的数字 user id，写入 `TELEGRAM_ALLOWED_USER_ID`。
+
+Mira 只接受私聊。群聊会被忽略，避免 Telegram 的 `message_id` 在不同 chat 中碰撞。
+
+## Deploy the Web service to Railway
+
+仓库根目录的 `railway.json` 只固定共享的 Railpack builder。Web 和两个 Cron 使用不同的 Railway service settings，避免同仓库配置覆盖各自的启动命令。
+
+```bash
+railway login
+railway link
+railway up --detach --message "Deploy Mira web runtime"
+railway domain
+```
+
+首次部署后，把 Railway domain 写入 `BASE_URL` **是不对的**：`BASE_URL` 是 OpenRouter API 地址。Telegram webhook URL 应单独传给设置脚本。
+
+在 Railway 为 Web 服务配置全部环境变量，然后执行生产 migration/seed：
+
+```bash
+railway run bun run db:migrate
+railway run bun run seed
+```
+
+健康检查：
+
+```bash
+curl -fsS https://YOUR_DOMAIN/api/health
+```
+
+返回 `configured: false` 表示进程已启动，但运行密钥尚未配置；它不代表数据库 migration 已完成。
+
+## Set the Telegram webhook
+
+```bash
+bun run telegram:set-webhook -- https://YOUR_DOMAIN
+```
+
+脚本会注册：
 
 ```text
-https://your-project.vercel.app/api/telegram/webhook
+https://YOUR_DOMAIN/api/telegram/webhook
 ```
 
-Webhook route 会同时验证 Telegram 的 `X-Telegram-Bot-Api-Secret-Token` 和 `TELEGRAM_ALLOWED_USER_ID`。不使用 long polling。
+Webhook route 会同时校验 Telegram secret token、允许的 user id 和 private chat。查看 Telegram 投递状态：
 
-## 部署到 Vercel
+```bash
+curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo"
+```
 
-1. 将仓库导入 Vercel，Framework 选择 Next.js。
-2. 在 Project Settings → Environment Variables 填入 `.env.example` 中的全部变量。
-3. 部署后在本地执行 webhook 设置脚本。
-4. 首次部署前或每次 schema 改动后，对生产 `DATABASE_URL` 执行 `npm run db:push` 和 `npm run seed`。
+不要把真实 token 放进工单、截图或 shell history。
 
-`vercel.json` 已配置：
+## Railway Cron
 
-- `/api/cron/hourly`：每个整点运行。
-- `/api/cron/daily`：每天 `14:50 UTC`，即默认 `Asia/Tokyo` 的 `23:50` 运行。
+Railway Cron 启动一个短进程，任务完成后必须退出。因此 cron 服务直接运行 runtime，不启动 Next.js Web server。
 
-Vercel Cron 会用 `Authorization: Bearer <CRON_SECRET>` 调用 route。route 也接受这个标准格式并拒绝错误 secret。
+同一仓库创建两个独立 Railway service，并设置各自的 start command 和 UTC schedule：
+
+| Service | Schedule (UTC) | Start command |
+| --- | --- | --- |
+| `mira-hourly` | `0 * * * *` | `bun run cron:hourly` |
+| `mira-daily` | `50 14 * * *` | `bun run cron:daily` |
+
+`50 14 * * *` 对应 Asia/Tokyo 23:50。两个 cron service 必须引用和 Web 相同的 Neon、OpenRouter、Telegram 配置。它们不需要 public domain 或 healthcheck。
+
+HTTP routes 仍保留给手动验证或外部调度器，并且必须校验 `CRON_SECRET`：
+
+```bash
+curl -fsS -H "Authorization: Bearer $CRON_SECRET" \
+  https://YOUR_DOMAIN/api/cron/hourly
+
+curl -fsS -H "Authorization: Bearer $CRON_SECRET" \
+  https://YOUR_DOMAIN/api/cron/daily
+```
+
+这些调用可能真的发送 Telegram 消息或写 daily journal，不要在生产环境反复执行。
 
 ## Dashboard
 
-访问 `/login`，输入 `ADMIN_PASSWORD`。登录成功后服务端写入 `httpOnly`、`sameSite=lax` cookie。
+Dashboard 使用 `ADMIN_PASSWORD` 登录，并把登录状态放在 httpOnly cookie 中。页面包括：
 
-Dashboard 包含 Overview、Conversations、State、Psyche、Memory、World、Events、Proactive、Tools、Critic、Audit 和 Settings。页面读取真实数据库；数据库未配置或暂时不可用时只显示明确标记的 demo snapshot，便于先检查 UI，但不会伪装成实时数据。
+- Overview：今日消息、主动预算、工具、记忆、mood、active arcs、近期事件。
+- Conversations：消息、annotation、topics、importance、novelty、raw JSON。
+- State：traits、mood、drives、relationship、7 天图表和状态变化。
+- Psyche：Id 驱动、Ego action plan、Actor 配置、cooldown。
+- Memory / World：记忆、seed cards、world events 和手动维护入口。
+- Events / Proactive / Tools：完整运行日志和主动性原因。
+- Audit：人格变化、记忆写入、工具调用和 daily reflection 的证据。
+- Settings：角色、policy、quiet hours、模型、边界和 seed cards。
 
-Memory 和 World 页面支持手动维护；Settings 保存 character/policy/model 配置，但不会读取或返回 API key、Telegram token、数据库地址或 OpenRouter base URL。
+数据库不可用时 Dashboard 会明确显示 demo snapshot，不会把 demo 数据标成实时数据。
 
-## 测试 Telegram 消息
+## Test the runtime
 
-最可靠的测试方式是部署后直接从 `TELEGRAM_ALLOWED_USER_ID` 对 bot 发消息，然后检查：
+Telegram：
 
-1. Telegram 是否收到回复。
-2. Dashboard Conversations 是否出现用户消息、annotation、draft/final reply。
-3. Events 是否出现 `user.message`、`critic.review`、`assistant.message` 等事件。
-4. Memory、State 和 Audit 是否记录对应变化。
+1. 确认 `getWebhookInfo` 中 URL 和最近错误为空。
+2. 使用允许的账号给 bot 发私聊消息。
+3. 检查 Dashboard Conversations 和 Events。
+4. 确认出现 `user.message`、`psyche.analyzer`、`psyche.ego.plan`、`assistant.message`。
 
-Telegram 失败时先检查 Vercel Function Logs 中 webhook 的 HTTP 状态，再使用 Bot API `getWebhookInfo` 查看 Telegram 最近的投递错误。
-
-## 测试 proactive cron
-
-本地或线上都可以手动调用：
-
-```bash
-curl -H "Authorization: Bearer $CRON_SECRET" \
-  http://localhost:3000/api/cron/hourly
-```
-
-即使 `shouldSend=false`，Proactive 页面也会留下检查原因。默认 quiet hours 是 `02:00–09:30 Asia/Tokyo`，每天最多 3 条，主动消息最短间隔 4 小时。
-
-## 测试 daily reflection
+Hourly proactive：
 
 ```bash
-curl -H "Authorization: Bearer $CRON_SECRET" \
-  http://localhost:3000/api/cron/daily
+bun run cron:hourly
 ```
 
-检查 Overview 最新 journal、Audit 的 daily reflection 和 State 的 state changes。traits 单日每个字段最多变化 `0.01`；mood、drives、relationship 和 active arcs 可以按受控启发式小幅更新。
+它可能因为 quiet hours、每日预算、最短间隔或分数不足而选择不发送；这也是正常且可审计的结果。
+
+Daily reflection：
+
+```bash
+bun run cron:daily
+```
+
+同一 companion/date 只会写入一次 journal。traits 的单日变化在 Growth Engine 中硬限制为每项不超过 `0.01`。
+
+## API routes
+
+- `POST /api/telegram/webhook`
+- `GET /api/cron/hourly`
+- `GET /api/cron/daily`
+- `POST /api/admin/login`
+- `GET /api/admin/state`
+- `GET /api/admin/messages`
+- `GET|POST|DELETE /api/admin/memories`
+- `GET /api/admin/events`
+- `GET|POST /api/admin/settings`
+- `POST /api/admin/seed`
+- `POST /api/admin/world/generate`
+- `GET /api/health`
 
 ## Design Notes
 
-- **同步 webhook**：MVP 在一次 Vercel function 中完成分析、回复和发送，结构最直观。用户消息使用 Telegram message id 做幂等约束，降低 Telegram 重试造成的重复写入。调用量上升或响应时间接近 function 上限时，再引入 Vercel Queue/Workflow。
-- **启发式是保底，不是第二套人格**：LLM JSON 解析或外部调用失败时，Analyzer、Ego、Actor 和 Critic 都有确定性 fallback，Telegram route 不会因为一段坏 JSON 直接崩溃。
-- **选择性记忆**：只写入超过 threshold 的候选；每次复用会增加计数，同日超过 3 次进入 24 小时 cooldown。pgvector 字段先保留，文本/tag scorer 足够覆盖 MVP。
-- **人格慢变化**：普通消息只调整 mood、drives、relationship；traits 主要由 daily reflection 修改并强制限制每日 delta。每次变化都保留 before、after、delta、reason 和 causedBy。
-- **主动性有预算**：quiet hours、每日上限、最短间隔和 Critic 都可以阻止发送；`do_nothing` 也是可审计动作。
-- **工具是 allowlist**：Actor 只能请求 registry 中注册的 `generate_fake_photo`。结果是明确标记的内在世界/生成图像文字，不声称真实拍照。
-- **简单认证的边界**：`ADMIN_PASSWORD` 适合单管理员原型，不提供账号找回、角色或审计用户。多人运营前应迁移到正式 identity provider。
-- **名称**：Mira 是项目/runtime；Mira 是当前 companion。character config 可以改名，不需要改表结构。
+- **OpenRouter only**：当前只实现 OpenAI-compatible Chat Completions，不做 provider abstraction。
+- **没有二次审查模块**：Actor 直接输出；危机表达使用确定性 safety override，工具名由 registry allowlist 约束，角色边界进入 Actor prompt。
+- **选择性记忆**：importance threshold、use count 和 cooldown 防止所有内容都被保存或重复消费。
+- **跨服务状态一致性**：Web 与 Cron 使用数据库 compare-and-swap 和重试，避免整块状态互相覆盖。
+- **主动预算先占用**：发送前创建 reservation，失败时释放；发送成功但后续持久化失败时保留占用，避免下一次 cron 连续打扰。
+- **Telegram 是至少一次投递**：Telegram webhook 会重试。当前 processing lease 和幂等记录能覆盖常见重复请求，但“Telegram 已发送、assistant 数据库写入失败”仍可能产生重复回复。严格 exactly-once 需要数据库 outbox/queue，是后续升级项。
+- **同步消息链路**：一次 webhook 内完成最多三次 20 秒 LLM 调用。流量或延迟上升后，应把处理改成 durable queue/outbox。
+- **mock photo 明示为生成内容**：不会声称真实拍照、旅行或现实存在。
+- **Health 是进程健康，不是数据库验收**：部署后仍必须单独运行 migration、seed 和真实 Telegram smoke test。
 
-## 后续扩展
+## Next steps
 
-- 接 OpenRouter embeddings 或独立 embedding provider，启用 pgvector ANN 检索。
-- 把同步 webhook 拆成可恢复队列，并为外部调用增加精细重试策略。
-- 接真实图像 API，但保留 tool registry、审查和 provenance 标记。
-- 增加多用户、多 companion、正式 RBAC 和配置版本历史。
-- 为 proactive scorer、daily reflection 和安全策略增加离线回放/evaluation。
-- 增加 Telegram 图片、语音消息和流式状态提示。
+- 数据库 outbox 和异步 webhook worker。
+- Embedding 写入、pgvector 相似度检索和 memory consolidation。
+- 更细的 safety policy 与可测试的边界规则。
+- 真实图片 provider，但保持同一个 tool registry contract。
+- 多用户隔离、正式身份系统、rate limit 和 observability。
+- Railway preview environment 与 migration gate。

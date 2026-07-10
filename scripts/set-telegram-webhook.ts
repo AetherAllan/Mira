@@ -4,7 +4,7 @@ import { getTelegramConfig } from "@/lib/config";
 const appUrl = process.argv[2]?.replace(/\/$/, "");
 if (!appUrl) {
   throw new Error(
-    "Usage: npm run telegram:set-webhook -- https://your-project.vercel.app",
+    "Usage: bun run telegram:set-webhook -- https://your-service.up.railway.app",
   );
 }
 if (!appUrl.startsWith("https://")) {

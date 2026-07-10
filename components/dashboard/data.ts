@@ -73,26 +73,7 @@ export interface DashboardProactiveLog {
   quietHoursBlocked: boolean;
   dailyLimitBlocked: boolean;
   intervalBlocked: boolean;
-  criticBlocked: boolean;
   score: number | null;
-  createdAt: DateValue;
-}
-
-export interface DashboardCriticReview {
-  id: string;
-  messageId: string | null;
-  approved: boolean;
-  tooRepetitive: number;
-  tooCustomerService: number;
-  tooIntimate: number;
-  tooRandom: number;
-  tooUserFitted: number;
-  boundaryRisk: number;
-  reason: string;
-  rewriteInstruction: string | null;
-  draftText: string | null;
-  finalText: string | null;
-  rawJson: unknown;
   createdAt: DateValue;
 }
 
@@ -137,6 +118,7 @@ export interface DashboardData {
   stats: {
     todayMessages: number;
     todayProactive: number;
+    todayProactiveReserved: number;
     todayToolCalls: number;
     todayMemoryWrites: number;
     proactiveRemaining: number;
@@ -149,10 +131,10 @@ export interface DashboardData {
   driveHistory: Array<Record<string, string | number>>;
   topicEntropy: TopicEntropy;
   repetitionScore: number;
+  mirrorIndex: number;
   worldEvents: DashboardWorldEvent[];
   seeds: DashboardSeed[];
   proactiveLogs: DashboardProactiveLog[];
-  criticReviews: DashboardCriticReview[];
   toolCalls: DashboardToolCall[];
   memories: DashboardMemory[];
 }
@@ -180,6 +162,7 @@ export const DEMO_DASHBOARD_DATA: DashboardData = {
   stats: {
     todayMessages: 14,
     todayProactive: 1,
+    todayProactiveReserved: 1,
     todayToolCalls: 1,
     todayMemoryWrites: 2,
     proactiveRemaining: 2,
@@ -276,13 +259,6 @@ export const DEMO_DASHBOARD_DATA: DashboardData = {
     },
   ],
   recentEvents: [
-    {
-      id: "e-1",
-      type: "critic.review",
-      source: "superego",
-      payloadJson: { approved: true, boundaryRisk: 0.03 },
-      createdAt: ago(0.58),
-    },
     {
       id: "e-2",
       type: "assistant.message",
@@ -416,6 +392,7 @@ export const DEMO_DASHBOARD_DATA: DashboardData = {
     ],
   },
   repetitionScore: 0.23,
+  mirrorIndex: 0.31,
   worldEvents: [
     {
       id: "we-1",
@@ -454,7 +431,6 @@ export const DEMO_DASHBOARD_DATA: DashboardData = {
       quietHoursBlocked: false,
       dailyLimitBlocked: false,
       intervalBlocked: false,
-      criticBlocked: false,
       score: 0.71,
       createdAt: ago(4.15),
     },
@@ -469,7 +445,6 @@ export const DEMO_DASHBOARD_DATA: DashboardData = {
       quietHoursBlocked: false,
       dailyLimitBlocked: false,
       intervalBlocked: true,
-      criticBlocked: false,
       score: 0.32,
       createdAt: ago(1),
     },
@@ -484,45 +459,8 @@ export const DEMO_DASHBOARD_DATA: DashboardData = {
       quietHoursBlocked: true,
       dailyLimitBlocked: false,
       intervalBlocked: false,
-      criticBlocked: false,
       score: 0.59,
       createdAt: ago(10),
-    },
-  ],
-  criticReviews: [
-    {
-      id: "cr-1",
-      messageId: "m-6",
-      approved: true,
-      tooRepetitive: 0.08,
-      tooCustomerService: 0.02,
-      tooIntimate: 0.01,
-      tooRandom: 0.12,
-      tooUserFitted: 0.18,
-      boundaryRisk: 0.02,
-      reason: "直接、具体，且没有把想象描述成现实经历。",
-      rewriteInstruction: null,
-      draftText: "先让它能跑。人格理论如果挡住 webhook，就是很昂贵的装饰。",
-      finalText: "先让它能跑。人格理论如果挡住 webhook，就是很昂贵的装饰。",
-      rawJson: { approved: true, model: "demo" },
-      createdAt: ago(0.58),
-    },
-    {
-      id: "cr-2",
-      messageId: "m-4",
-      approved: false,
-      tooRepetitive: 0.2,
-      tooCustomerService: 0.06,
-      tooIntimate: 0.03,
-      tooRandom: 0.66,
-      tooUserFitted: 0.11,
-      boundaryRisk: 0.42,
-      reason: "初稿把想象场景说得像真实拍摄。",
-      rewriteInstruction: "明确标注为生成图像或内在世界场景。",
-      draftText: "我刚拍了便利店外那块坏掉的霓虹。",
-      finalText: "生成图像 / 内在世界场景：雨后的便利店玻璃反着一小块坏掉的霓虹。",
-      rawJson: { approved: false, rewrite: true },
-      createdAt: ago(4.12),
     },
   ],
   toolCalls: [

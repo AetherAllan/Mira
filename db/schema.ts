@@ -89,6 +89,11 @@ export const messages = pgTable(
     telegramMessageId: integer("telegram_message_id"),
     chatId: text("chat_id"),
     memoryCandidateJson: jsonb("memory_candidate_json"),
+    processingStatus: text("processing_status", {
+      enum: ["received", "processing", "completed", "failed"],
+    }),
+    processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
+    processingCompletedAt: timestamp("processing_completed_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
   (table) => [
@@ -229,33 +234,10 @@ export const proactiveLogs = pgTable(
     quietHoursBlocked: boolean("quiet_hours_blocked").notNull().default(false),
     dailyLimitBlocked: boolean("daily_limit_blocked").notNull().default(false),
     intervalBlocked: boolean("interval_blocked").notNull().default(false),
-    criticBlocked: boolean("critic_blocked").notNull().default(false),
     score: real("score"),
     createdAt: createdAt(),
   },
   (table) => [index("proactive_logs_companion_created_idx").on(table.companionId, table.createdAt)],
-);
-
-export const criticReviews = pgTable(
-  "critic_reviews",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    messageId: uuid("message_id").references(() => messages.id, { onDelete: "cascade" }),
-    approved: boolean("approved").notNull(),
-    tooRepetitive: real("too_repetitive").notNull(),
-    tooCustomerService: real("too_customer_service").notNull(),
-    tooIntimate: real("too_intimate").notNull(),
-    tooRandom: real("too_random").notNull(),
-    tooUserFitted: real("too_user_fitted").notNull(),
-    boundaryRisk: real("boundary_risk").notNull().default(0),
-    reason: text("reason").notNull(),
-    rewriteInstruction: text("rewrite_instruction"),
-    draftText: text("draft_text"),
-    finalText: text("final_text"),
-    rawJson: jsonb("raw_json"),
-    createdAt: createdAt(),
-  },
-  (table) => [index("critic_reviews_created_idx").on(table.createdAt)],
 );
 
 export const stateChanges = pgTable(

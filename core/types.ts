@@ -125,18 +125,6 @@ export interface ActorOutput {
   memoryCandidate: MemoryCandidate | null;
 }
 
-export interface CriticOutput {
-  approved: boolean;
-  tooRepetitive: number;
-  tooCustomerService: number;
-  tooIntimate: number;
-  tooRandom: number;
-  tooUserFitted: number;
-  boundaryRisk: number;
-  reason: string;
-  rewriteInstruction: string | null;
-}
-
 export interface SelectedMemory {
   id: string;
   kind: MemoryKind;

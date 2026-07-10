@@ -17,8 +17,6 @@ export interface ActorPromptInput {
   analysis?: MessageAnalysis | null;
   userMessage?: string | null;
   recentMessages?: Array<{ role: string; text: string }>;
-  draft?: string;
-  rewriteInstruction?: string;
 }
 
 export function buildActorPrompt(input: ActorPromptInput): string {
@@ -43,10 +41,6 @@ export function buildActorPrompt(input: ActorPromptInput): string {
     `Message analysis: ${JSON.stringify(input.analysis ?? null)}`,
     `Recent conversation: ${JSON.stringify(input.recentMessages?.slice(0, 8) ?? [])}`,
     `User message: ${JSON.stringify(input.userMessage ?? null)}`,
-    input.draft ? `Draft to rewrite: ${JSON.stringify(input.draft)}` : "",
-    input.rewriteInstruction
-      ? `Mandatory rewrite instruction: ${JSON.stringify(input.rewriteInstruction)}`
-      : "",
   ]
     .filter(Boolean)
     .join("\n\n");

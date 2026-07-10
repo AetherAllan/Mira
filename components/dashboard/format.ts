@@ -48,11 +48,9 @@ export function percent(value: number) {
 export function eventTone(type: string) {
   if (type.startsWith("user")) return "bg-sky-400";
   if (type.startsWith("assistant")) return "bg-violet-400";
-  if (type.startsWith("critic")) return "bg-amber-400";
   if (type.startsWith("memory")) return "bg-emerald-400";
   if (type.startsWith("tool")) return "bg-fuchsia-400";
   if (type.startsWith("state")) return "bg-cyan-400";
   if (type.startsWith("proactive")) return "bg-rose-400";
   return "bg-zinc-500";
 }
-

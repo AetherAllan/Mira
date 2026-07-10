@@ -1,6 +1,6 @@
 {
-  "id": "30584524-f864-4a73-86bf-ce53a19a6820",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "0978eb92-bcaa-41df-a48e-4b5e02c60ec1",
+  "prevId": "30584524-f864-4a73-86bf-ce53a19a6820",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -173,142 +173,6 @@
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.critic_reviews": {
-      "name": "critic_reviews",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "message_id": {
-          "name": "message_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "approved": {
-          "name": "approved",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "too_repetitive": {
-          "name": "too_repetitive",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "too_customer_service": {
-          "name": "too_customer_service",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "too_intimate": {
-          "name": "too_intimate",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "too_random": {
-          "name": "too_random",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "too_user_fitted": {
-          "name": "too_user_fitted",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "boundary_risk": {
-          "name": "boundary_risk",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "rewrite_instruction": {
-          "name": "rewrite_instruction",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "draft_text": {
-          "name": "draft_text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "final_text": {
-          "name": "final_text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "raw_json": {
-          "name": "raw_json",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "critic_reviews_created_idx": {
-          "name": "critic_reviews_created_idx",
-          "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "critic_reviews_message_id_messages_id_fk": {
-          "name": "critic_reviews_message_id_messages_id_fk",
-          "tableFrom": "critic_reviews",
-          "tableTo": "messages",
-          "columnsFrom": [
-            "message_id"
           ],
           "columnsTo": [
             "id"
@@ -1035,6 +899,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "processing_status": {
+          "name": "processing_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "processing_started_at": {
+          "name": "processing_started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "processing_completed_at": {
+          "name": "processing_completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -1202,13 +1084,6 @@
         },
         "interval_blocked": {
           "name": "interval_blocked",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "critic_blocked": {
-          "name": "critic_blocked",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,

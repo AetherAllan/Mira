@@ -2,6 +2,15 @@ export function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
+export function isValidTimeZone(value: string) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function zonedDateKey(date = new Date(), timeZone = "Asia/Tokyo") {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,

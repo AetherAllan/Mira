@@ -24,7 +24,7 @@ export default function HomePage() {
             <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-400/60">Telegram-native / stateful / observable</p>
             <h1 className="mt-5 max-w-3xl text-4xl font-medium leading-[1.05] tracking-[-0.045em] text-zinc-100 sm:text-6xl">A companion with<br /><span className="text-zinc-500">an inner runtime.</span></h1>
             <p className="mt-6 max-w-xl text-sm leading-7 text-zinc-500">Mira 不只生成下一句话。Mira 让她的驱动、记忆、边界、主动行为和缓慢的人格变化都可追踪、可审查。</p>
-            <div className="mt-8 flex flex-wrap gap-3"><Button asChild><Link href="/login">Open observatory <ArrowRight className="size-3.5" /></Link></Button><span className="flex items-center gap-2 px-2 font-mono text-[9px] uppercase tracking-wider text-zinc-700"><span className="size-1.5 rounded-full bg-emerald-400" /> Vercel webhook ready</span></div>
+            <div className="mt-8 flex flex-wrap gap-3"><Button asChild><Link href="/login">Open observatory <ArrowRight className="size-3.5" /></Link></Button><span className="flex items-center gap-2 px-2 font-mono text-[9px] uppercase tracking-wider text-zinc-700"><span className="size-1.5 rounded-full bg-emerald-400" /> Railway webhook ready</span></div>
           </div>
           <div className="lab-panel p-5 sm:p-7">
             <div className="flex items-center justify-between border-b border-white/[0.06] pb-4"><div><p className="font-mono text-[9px] tracking-[0.18em] text-zinc-600">PSYCHE ENGINE / LIVE VECTOR</p><p className="mt-1 text-sm text-zinc-200">Mira · awake, restrained</p></div><div className="relative size-10 rounded-full border border-cyan-400/20"><span className="absolute inset-2 animate-pulse rounded-full bg-cyan-400/15" /></div></div>

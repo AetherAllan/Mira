@@ -8,25 +8,30 @@ import type {
 import {
   bootstrapCompanion,
   applyDailyReflectionTransaction,
+  claimMessageProcessing,
+  completeMessageProcessing,
   countTodayToolCalls,
   createAnnotation,
-  createEventSeeds,
-  createInternalJournal,
   createMemory,
   createMessage,
   createProactiveLog,
   createStateChange,
   createToolCall,
+  findAssistantReply,
+  finishMessageProcessing,
+  getCompanionState,
   getProactiveStats,
   getRuntimeContext,
   getToolStats,
+  hasMessageProcessingClaim,
   listAvailableMemories,
   listEnabledSeeds,
   listRecentAnnotations,
   listRecentMessages,
   listTodayActivity,
   markSeedUsed,
-  updateCompanionState,
+  updateCompanionStateIfCurrent,
+  updateProactiveLog,
   useMemories,
 } from "@/db/repo";
 import { logRuntimeEvent } from "@/core/eventLog";
@@ -60,6 +65,8 @@ import { executeTool, TOOL_REGISTRY, type ToolExecution } from "@/tools/registry
 
 type RuntimeContext = NonNullable<Awaited<ReturnType<typeof getRuntimeContext>>>;
 type RecentMessage = Awaited<ReturnType<typeof listRecentMessages>>[number];
+
+const stateQueues = new Map<string, Promise<void>>();
 
 interface ActorResult {
   finalText: string;
@@ -179,36 +186,65 @@ async function annotateAssistant(
   });
 }
 
-async function alreadyHasReply(context: RuntimeContext, telegramMessageId: number): Promise<boolean> {
-  const messages = await listRecentMessages(context.companion.id, 30);
-  return messages.some((message) => {
-    if (message.role !== "assistant") return false;
-    return asObject(message.rawJson)?.replyToTelegramMessageId === telegramMessageId;
-  });
-}
-
 async function persistState(
   context: RuntimeContext,
-  state: CompanionState,
   changes: StateChangeDraft[],
 ) {
   if (!changes.length) return;
-  await updateCompanionState(context.companion.id, state);
-  for (const change of changes) {
-    await createStateChange({ companionId: context.companion.id, ...change });
-    await logRuntimeEvent({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      type: "state.change",
-      source: change.causedBy,
-      payloadJson: {
-        targetPath: change.targetPath,
-        before: change.beforeJson,
-        after: change.afterJson,
-        delta: change.deltaJson,
-        reason: change.reason,
-      },
-    });
+  const companionId = context.companion.id;
+  const previous = stateQueues.get(companionId) ?? Promise.resolve();
+  let release = () => {};
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => current);
+  stateQueues.set(companionId, tail);
+  await previous;
+
+  try {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const latest = await getCompanionState(companionId);
+      const next = structuredClone(latest);
+      const rebasedChanges = changes.map((change) => {
+        const path = change.targetPath as keyof Pick<
+          CompanionState,
+          "traits" | "mood" | "drives" | "relationship"
+        >;
+        const delta = asObject(change.deltaJson);
+        const currentGroup = asObject(next[path]);
+        if (!delta || !currentGroup) return change;
+
+        const before = { ...currentGroup };
+        for (const [key, value] of Object.entries(delta)) {
+          if (typeof value === "number" && typeof currentGroup[key] === "number") {
+            currentGroup[key] = Math.min(1, Math.max(0, currentGroup[key] + value));
+          }
+        }
+        return { ...change, beforeJson: before, afterJson: { ...currentGroup } };
+      });
+
+      const updated = await updateCompanionStateIfCurrent(companionId, latest, next);
+      if (!updated) continue;
+      for (const change of rebasedChanges) {
+        await createStateChange({ companionId, ...change });
+        await logRuntimeEvent({
+          userId: context.user.id,
+          companionId,
+          type: "state.change",
+          source: change.causedBy,
+          payloadJson: {
+            targetPath: change.targetPath,
+            before: change.beforeJson,
+            after: change.afterJson,
+            delta: change.deltaJson,
+            reason: change.reason,
+          },
+        });
+      }
+      return;
+    }
+    throw new Error("Companion state changed too often; retry the operation");
+  } finally {
+    release();
+    if (stateQueues.get(companionId) === tail) stateQueues.delete(companionId);
   }
 }
 
@@ -220,7 +256,8 @@ function composeToolResult(message: string, execution: ToolExecution | null): st
     : message;
 }
 
-// ponytail: Critic removed; Actor output goes straight out. Crisis still short-circuits earlier.
+// The Actor output goes straight out. Crisis handling still short-circuits earlier,
+// and tool names remain constrained by the registry.
 async function runActor(input: Parameters<typeof act>[0]): Promise<ActorResult> {
   const firstActor = await act(input);
   const toolExecution = firstActor.output.toolCall ? await executeTool(firstActor.output.toolCall) : null;
@@ -260,6 +297,8 @@ async function persistSafetyReply(
   context: RuntimeContext,
   message: TelegramTextMessage,
   analysis: MessageAnalysis,
+  userMessageId: string,
+  processingStartedAt: Date,
 ) {
   const plan: ActionPlan = {
     action: "reply",
@@ -278,6 +317,9 @@ async function persistSafetyReply(
     source: "safety",
     payloadJson: plan,
   });
+  if (!await hasMessageProcessingClaim(userMessageId, processingStartedAt)) {
+    throw new Error("Telegram processing lease was replaced before send");
+  }
   const telegram = await sendTelegramMessage(message.chatId, SAFETY_REPLY);
   const assistant = await createMessage({
     userId: context.user.id,
@@ -308,7 +350,7 @@ async function persistSafetyReply(
     payloadJson: { messageId: assistant.row.id, analysis, actionPlan: plan },
   });
   const growth = applyInteractionGrowth(context.state, analysis);
-  await persistState(context, growth.state, growth.changes);
+  await persistState(context, growth.changes);
   return { status: "processed" as const, safetyMode: true, messageId: assistant.row.id };
 }
 
@@ -325,17 +367,52 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
     rawJson: message.raw,
     telegramMessageId: message.messageId,
     chatId: message.chatId,
+    processingStatus: "received",
   });
-  if (!userMessage.created) {
-    if (await alreadyHasReply(context, message.messageId)) {
-      return { status: "duplicate" as const };
-    }
-    // A second delivery can arrive while the first serverless invocation is still
-    // processing. Ask Telegram to retry instead of running two Actors in parallel.
-    if (Date.now() - userMessage.row.createdAt.getTime() < 30_000) {
-      return { status: "in_progress" as const };
-    }
+  if (!userMessage.created && await findAssistantReply(
+    context.companion.id,
+    message.chatId,
+    message.messageId,
+  )) {
+    await completeMessageProcessing(userMessage.row.id);
+    return { status: "duplicate" as const };
   }
+
+  const claim = await claimMessageProcessing(userMessage.row.id);
+  if (!claim) {
+    return userMessage.row.processingStatus === "completed"
+      ? { status: "duplicate" as const }
+      : { status: "in_progress" as const };
+  }
+  if (!claim.processingStartedAt) throw new Error("Telegram processing claim has no timestamp");
+
+  try {
+    const result = await processTelegramMessage(
+      context,
+      userMessage,
+      message,
+      claim.processingStartedAt,
+    );
+    await finishMessageProcessing(userMessage.row.id, claim.processingStartedAt, "completed");
+    return result;
+  } catch (error) {
+    await finishMessageProcessing(
+      userMessage.row.id,
+      claim.processingStartedAt,
+      "failed",
+    ).catch((finishError) => {
+      console.error("Failed to release Telegram processing claim", finishError);
+    });
+    throw error;
+  }
+}
+
+async function processTelegramMessage(
+  context: RuntimeContext,
+  userMessage: Awaited<ReturnType<typeof createMessage>>,
+  message: TelegramTextMessage,
+  processingStartedAt: Date,
+) {
 
   await logRuntimeEvent({
     userId: context.user.id,
@@ -371,7 +448,13 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
     },
   });
   if (analyzed.analysis.intent === "safety_crisis") {
-    return persistSafetyReply(context, message, analyzed.analysis);
+    return persistSafetyReply(
+      context,
+      message,
+      analyzed.analysis,
+      userMessage.row.id,
+      processingStartedAt,
+    );
   }
 
   const timeZone = config.policy.quietHours.timeZone;
@@ -466,6 +549,9 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
     userMessage: message.text,
     recentMessages: recentMessages.map((item) => ({ role: item.role, text: item.text })),
   });
+  if (!await hasMessageProcessingClaim(userMessage.row.id, processingStartedAt)) {
+    throw new Error("Telegram processing lease was replaced before send");
+  }
   const telegram = await sendTelegramMessage(message.chatId, acted.finalText);
   const assistant = await createMessage({
     userId: context.user.id,
@@ -516,7 +602,7 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
     });
   }
   const growth = applyInteractionGrowth(context.state, analyzed.analysis);
-  await persistState(context, growth.state, growth.changes);
+  await persistState(context, growth.changes);
   await logRuntimeEvent({
     userId: context.user.id,
     companionId: context.companion.id,
@@ -552,7 +638,6 @@ async function writeProactiveLog(
     quietHoursBlocked?: boolean;
     dailyLimitBlocked?: boolean;
     intervalBlocked?: boolean;
-    criticBlocked?: boolean;
     score: number;
   },
 ) {
@@ -566,12 +651,31 @@ async function writeProactiveLog(
     quietHoursBlocked: false,
     dailyLimitBlocked: false,
     intervalBlocked: false,
-    criticBlocked: false,
     ...input,
   });
 }
 
-export async function runHourlyProactive(now = new Date()) {
+type ProactiveRunResult = {
+  sent: boolean;
+  reason: string;
+  score?: number;
+  scoreThreshold?: number;
+  messageId?: string;
+};
+
+let hourlyRun: Promise<ProactiveRunResult> | null = null;
+
+export async function runHourlyProactive(now = new Date()): Promise<ProactiveRunResult> {
+  if (hourlyRun) return { sent: false, reason: "already_running" };
+  hourlyRun = runHourlyProactiveOnce(now);
+  try {
+    return await hourlyRun;
+  } finally {
+    hourlyRun = null;
+  }
+}
+
+async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
   const context = await primaryContext();
   const config = runtimeConfig(context);
   const timeZone = config.policy.quietHours.timeZone;
@@ -649,16 +753,6 @@ export async function runHourlyProactive(now = new Date()) {
     });
     return { sent: false, reason: "score_below_threshold", score, scoreThreshold };
   }
-  // Spread sends across 15m slots instead of always firing on the hour.
-  if (Math.random() > 0.25) {
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: "Timing jitter: skipped this slot to feel less clockwork",
-      score,
-    });
-    return { sent: false, reason: "timing_jitter", score };
-  }
-
   const latestAnnotation = recentAnnotations.find((item) => item.messageRole === "user") as
     | (Record<string, unknown> & { messageRole?: string })
     | undefined;
@@ -750,78 +844,95 @@ export async function runHourlyProactive(now = new Date()) {
   });
 
   const chatId = recentMessages.find((message) => message.role === "user" && message.chatId)?.chatId ?? context.user.telegramUserId;
-  const telegram = await sendTelegramMessage(chatId, acted.finalText);
-  const assistant = await createMessage({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    role: "assistant",
-    text: acted.finalText,
-    rawJson: {
-      proactive: true,
-      actionPlan: plan,
-      actorRaw: acted.actorRaw,
-      selectedSeed,
-      selectedMemories: selectedMemories.map((memory) => memory.id),
-      score,
-      topicEntropy,
-      mirrorIndex,
-      telegram: telegram.raw,
-    },
-    telegramMessageId: telegram.messageId,
-    chatId,
-    memoryCandidateJson: acted.actorOutput.memoryCandidate,
+  // Reserve budget before the external send. If persistence fails after
+  // Telegram accepts the message, the reservation still prevents another send.
+  const reservation = await writeProactiveLog(context, {
+    shouldSend: true,
+    reason: `Reserved before send: ${plan.reason}`,
+    selectedMode: plan.mode,
+    selectedSeedJson: selectedSeed,
+    score,
   });
-  await annotateAssistant(assistant.row.id, {
-    text: acted.finalText,
-    plan,
-    analysis,
-    selectedSeed,
-    proactive: true,
-  });
-  await persistToolExecution(context, assistant.row.id, acted.toolExecution, plan.reason);
-  if (selectedSeed.id) await markSeedUsed(selectedSeed.id);
-  if (shouldStoreMemory(acted.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
-    const memory = await createMemory({
+  let telegramSent = false;
+  try {
+    const telegram = await sendTelegramMessage(chatId, acted.finalText);
+    telegramSent = true;
+    const assistant = await createMessage({
       userId: context.user.id,
       companionId: context.companion.id,
-      ...acted.actorOutput.memoryCandidate,
-      tagsJson: acted.actorOutput.memoryCandidate.tags,
-      confidence: 0.72,
+      role: "assistant",
+      text: acted.finalText,
+      rawJson: {
+        proactive: true,
+        actionPlan: plan,
+        actorRaw: acted.actorRaw,
+        selectedSeed,
+        selectedMemories: selectedMemories.map((memory) => memory.id),
+        score,
+        topicEntropy,
+        mirrorIndex,
+        telegram: telegram.raw,
+      },
+      telegramMessageId: telegram.messageId,
+      chatId,
+      memoryCandidateJson: acted.actorOutput.memoryCandidate,
+    });
+    await annotateAssistant(assistant.row.id, {
+      text: acted.finalText,
+      plan,
+      analysis,
+      selectedSeed,
+      proactive: true,
+    });
+    await persistToolExecution(context, assistant.row.id, acted.toolExecution, plan.reason);
+    if (selectedSeed.id) await markSeedUsed(selectedSeed.id);
+    if (shouldStoreMemory(acted.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
+      const memory = await createMemory({
+        userId: context.user.id,
+        companionId: context.companion.id,
+        ...acted.actorOutput.memoryCandidate,
+        tagsJson: acted.actorOutput.memoryCandidate.tags,
+        confidence: 0.72,
+      });
+      await logRuntimeEvent({
+        userId: context.user.id,
+        companionId: context.companion.id,
+        type: "memory.write",
+        source: "actor.proactive",
+        payloadJson: { memoryId: memory.id, candidate: acted.actorOutput.memoryCandidate },
+      });
+    }
+    await updateProactiveLog(reservation.id, {
+      reason: plan.reason,
+      sentMessageId: assistant.row.id,
+      sentText: acted.finalText,
     });
     await logRuntimeEvent({
       userId: context.user.id,
       companionId: context.companion.id,
-      type: "memory.write",
-      source: "actor.proactive",
-      payloadJson: { memoryId: memory.id, candidate: acted.actorOutput.memoryCandidate },
+      type: "proactive.sent",
+      source: "cron.hourly",
+      payloadJson: { messageId: assistant.row.id, score, actionPlan: plan, selectedSeed },
     });
+    await logRuntimeEvent({
+      userId: context.user.id,
+      companionId: context.companion.id,
+      type: "assistant.message",
+      source: "telegram.proactive",
+      payloadJson: { messageId: assistant.row.id, actionPlan: plan },
+    });
+    const growth = applyProactiveGrowth(context.state);
+    await persistState(context, growth.changes);
+    return { sent: true, reason: plan.reason, score, messageId: assistant.row.id };
+  } catch (error) {
+    await updateProactiveLog(reservation.id, telegramSent
+      ? { reason: `Telegram sent; persistence incomplete: ${plan.reason}` }
+      : { shouldSend: false, reason: `Send failed: ${plan.reason}` }
+    ).catch((updateError) => {
+      console.error("Failed to update proactive reservation", updateError);
+    });
+    throw error;
   }
-  await writeProactiveLog(context, {
-    shouldSend: true,
-    reason: plan.reason,
-    selectedMode: plan.mode,
-    selectedSeedJson: selectedSeed,
-    sentMessageId: assistant.row.id,
-    sentText: acted.finalText,
-    score,
-  });
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "proactive.sent",
-    source: "cron.hourly",
-    payloadJson: { messageId: assistant.row.id, score, actionPlan: plan, selectedSeed },
-  });
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "assistant.message",
-    source: "telegram.proactive",
-    payloadJson: { messageId: assistant.row.id, actionPlan: plan },
-  });
-  const growth = applyProactiveGrowth(context.state);
-  await persistState(context, growth.state, growth.changes);
-  return { sent: true, reason: plan.reason, score, messageId: assistant.row.id };
 }
 
 export async function runDailyReflection(now = new Date()) {
@@ -841,37 +952,42 @@ export async function runDailyReflection(now = new Date()) {
     config.policy.quietHours.timeZone,
   );
   const generated = await reflectOnDay(activity, context.state, config);
-  const journalResult = await createInternalJournal({
-    companionId: context.companion.id,
-    date,
-    summary: generated.reflection.summary,
-    reflection: generated.reflection.reflection,
-    traitUpdatesJson: generated.reflection.traitUpdates,
-    beliefUpdatesJson: {},
-    arcUpdatesJson: generated.reflection.arcUpdates,
-  });
+  let growth: ReturnType<typeof applyDailyReflection> | null = null;
+  let journalResult: Awaited<ReturnType<typeof applyDailyReflectionTransaction>> | null = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const latestState = await getCompanionState(context.companion.id);
+    growth = applyDailyReflection(latestState, generated.reflection);
+    // Neon HTTP cannot keep a callback transaction open. The repository commits
+    // journal, state, audit rows and tomorrow seeds in one PostgreSQL statement.
+    journalResult = await applyDailyReflectionTransaction({
+      journalInput: {
+        companionId: context.companion.id,
+        date,
+        summary: generated.reflection.summary,
+        reflection: generated.reflection.reflection,
+        traitUpdatesJson: generated.reflection.traitUpdates,
+        beliefUpdatesJson: {},
+        arcUpdatesJson: generated.reflection.arcUpdates,
+      },
+      expectedState: latestState,
+      state: growth.state,
+      changes: growth.changes,
+      seeds: generated.reflection.tomorrowSeeds,
+      userId: context.user.id,
+      eventPayload: {
+        usedFallback: generated.usedFallback,
+        error: generated.error,
+        raw: generated.raw,
+      },
+    });
+    if (!journalResult.conflict) break;
+  }
+  if (!growth || !journalResult || journalResult.conflict || !journalResult.row) {
+    throw new Error("Companion state changed too often during daily reflection");
+  }
   if (!journalResult.created) {
     return { reflected: false, reason: "already_reflected", date, journalId: journalResult.row.id };
   }
-
-  const growth = applyDailyReflection(context.state, generated.reflection);
-  await persistState(context, growth.state, growth.changes);
-  if (generated.reflection.tomorrowSeeds.length) {
-    await createEventSeeds(context.companion.id, generated.reflection.tomorrowSeeds);
-  }
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "daily.reflection",
-    source: "growth",
-    payloadJson: {
-      journalId: journalResult.row.id,
-      date,
-      reflection: generated.reflection,
-      usedFallback: generated.usedFallback,
-      error: generated.error,
-    },
-  });
   if (generated.reflection.tomorrowSeeds.length) {
     await logRuntimeEvent({
       userId: context.user.id,

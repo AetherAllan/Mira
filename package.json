@@ -11,10 +11,13 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests/*.test.ts",
+    "db:migrate": "bunx drizzle-kit migrate",
     "db:push": "bun scripts/db-push.ts && bunx drizzle-kit push",
     "db:studio": "bunx drizzle-kit studio",
     "seed": "bun scripts/seed.ts",
-    "telegram:set-webhook": "bun scripts/set-telegram-webhook.ts"
+    "telegram:set-webhook": "bun scripts/set-telegram-webhook.ts",
+    "cron:hourly": "bun scripts/run-cron.ts hourly",
+    "cron:daily": "bun scripts/run-cron.ts daily"
   },
   "dependencies": {
     "@neondatabase/serverless": "1.1.0",
