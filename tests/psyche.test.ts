@@ -5,11 +5,19 @@ import { detectCrisis } from "@/psyche/analyzer";
 import { applyDailyReflection } from "@/psyche/growthEngine";
 import { selectNoveltySeed } from "@/psyche/noveltyEngine";
 import { INITIAL_STATE } from "@/seed/character";
+import { splitTelegramBubbles } from "@/telegram/client";
 import { executeTool } from "@/tools/registry";
 
 test("crisis detection does not depend on the model", () => {
   assert.equal(detectCrisis("我不想活下去了"), true);
   assert.equal(detectCrisis("这个 build 不想活了"), false);
+});
+
+test("telegram bubbles split on real and literal newlines", () => {
+  assert.deepEqual(splitTelegramBubbles("嗨\n先歇一下"), ["嗨", "先歇一下"]);
+  assert.deepEqual(splitTelegramBubbles("嗨\\n先歇一下"), ["嗨", "先歇一下"]);
+  assert.deepEqual(splitTelegramBubbles("单条"), ["单条"]);
+  assert.deepEqual(splitTelegramBubbles("a\n\n\nb"), ["a", "b"]);
 });
 
 test("daily reflection hard-clamps trait drift to 0.01", () => {
