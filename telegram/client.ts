@@ -6,13 +6,16 @@ interface TelegramApiResponse {
 
 /** Each non-empty line becomes its own Telegram bubble.
  * Accepts real newlines and literal "\\n" (models often emit the latter in JSON). */
-export function splitTelegramBubbles(text: string): string[] {
-  return text
+export function splitTelegramBubbles(text: string, maxParts = 5): string[] {
+  const lines = text
     .replace(/\\n/g, "\n")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => line.slice(0, 4096));
+  if (lines.length <= maxParts) return lines;
+  // ponytail: merge overflow into last bubble so a chatty model can't stall the webhook
+  return [...lines.slice(0, maxParts - 1), lines.slice(maxParts - 1).join("\n")];
 }
 
 async function sendOne(token: string, chatId: string, text: string): Promise<{

@@ -327,7 +327,7 @@ export async function findAssistantReply(
 }
 
 export async function claimMessageProcessing(messageId: string) {
-  const staleBefore = new Date(Date.now() - 5 * 60_000);
+  const staleBefore = new Date(Date.now() - 90_000);
   const processingStartedAt = new Date();
   const rows = await getDb()
     .update(messages)

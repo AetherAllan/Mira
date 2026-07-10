@@ -18,6 +18,7 @@ test("telegram bubbles split on real and literal newlines", () => {
   assert.deepEqual(splitTelegramBubbles("嗨\\n先歇一下"), ["嗨", "先歇一下"]);
   assert.deepEqual(splitTelegramBubbles("单条"), ["单条"]);
   assert.deepEqual(splitTelegramBubbles("a\n\n\nb"), ["a", "b"]);
+  assert.deepEqual(splitTelegramBubbles("1\n2\n3\n4\n5\n6\n7", 5), ["1", "2", "3", "4", "5\n6\n7"]);
 });
 
 test("daily reflection hard-clamps trait drift to 0.01", () => {

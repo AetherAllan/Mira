@@ -27,12 +27,8 @@ export async function POST(request: Request) {
 
   try {
     const result = await handleTelegramMessage(message);
-    if (result.status === "in_progress") {
-      return Response.json(
-        { ok: false, retry: true },
-        { status: 503, headers: { "Retry-After": "2" } },
-      );
-    }
+    // Acknowledge delivery even if another worker holds the lease. A 503 makes
+    // Telegram retry into a wall until the 5m stale reclaim fires.
     return Response.json({ ok: true, ...result });
   } catch (error) {
     console.error("Telegram webhook failed", error);
