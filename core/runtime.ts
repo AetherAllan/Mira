@@ -1,7 +1,6 @@
 import type {
   ActionPlan,
   CompanionState,
-  CriticOutput,
   MessageAnalysis,
   RuntimeConfig,
   SeedCard,
@@ -11,7 +10,6 @@ import {
   applyDailyReflectionTransaction,
   countTodayToolCalls,
   createAnnotation,
-  createCriticReview,
   createEventSeeds,
   createInternalJournal,
   createMemory,
@@ -39,7 +37,7 @@ import {
   computeTopicEntropy,
 } from "@/core/metrics";
 import { hoursSince, isQuietHours, zonedDateKey } from "@/lib/time";
-import { act, rewriteOnce } from "@/psyche/actor";
+import { act } from "@/psyche/actor";
 import { analyzeMessage } from "@/psyche/analyzer";
 import { directAction } from "@/psyche/egoDirector";
 import {
@@ -56,7 +54,6 @@ import {
   shouldStoreMemory,
 } from "@/psyche/memory";
 import { selectNoveltySeed } from "@/psyche/noveltyEngine";
-import { reviewDraft } from "@/psyche/superegoCritic";
 import { sendTelegramMessage } from "@/telegram/client";
 import type { TelegramTextMessage } from "@/telegram/webhook";
 import { executeTool, TOOL_REGISTRY, type ToolExecution } from "@/tools/registry";
@@ -64,38 +61,15 @@ import { executeTool, TOOL_REGISTRY, type ToolExecution } from "@/tools/registry
 type RuntimeContext = NonNullable<Awaited<ReturnType<typeof getRuntimeContext>>>;
 type RecentMessage = Awaited<ReturnType<typeof listRecentMessages>>[number];
 
-interface CriticTrace {
-  review: CriticOutput;
-  raw: unknown;
-  draftText: string;
-  finalText: string;
-}
-
-interface ReviewedActorResult {
+interface ActorResult {
   finalText: string;
   actorOutput: Awaited<ReturnType<typeof act>>["output"];
   actorRaw: unknown;
-  traces: CriticTrace[];
   toolExecution: ToolExecution | null;
-  criticBlocked: boolean;
 }
 
 const SAFETY_REPLY =
   "我先认真一点：如果你现在可能伤害自己，或正处于立即危险，请立刻联系当地紧急服务，并马上联系一个你信任、能到场的人。先离开危险物品和独处环境，去有人的地方。你现在是否处于立即危险？";
-
-const SAFE_FALLBACKS: Record<string, string> = {
-  technical_discussion:
-    "换个更准确的说法：先把最小闭环跑通，再从真实日志决定下一步；现在不需要给它增加更多抽象。",
-  distressed:
-    "先不把感受包装成结论。找一个十分钟内能处理的具体动作，做完再看剩下的问题。",
-  default: "先保留一个具体问题：你刚才那件事里，下一步实际能做的最小动作是什么？",
-};
-
-function safeFallback(analysis: MessageAnalysis | null | undefined): string {
-  if (analysis?.intent === "technical_discussion") return SAFE_FALLBACKS.technical_discussion;
-  if (analysis?.emotion === "distressed") return SAFE_FALLBACKS.distressed;
-  return SAFE_FALLBACKS.default;
-}
 
 function runtimeConfig(context: RuntimeContext): RuntimeConfig {
   return context.companion.configJson;
@@ -246,138 +220,16 @@ function composeToolResult(message: string, execution: ToolExecution | null): st
     : message;
 }
 
-async function runReviewedActor(
-  input: Parameters<typeof act>[0],
-  recentAssistant: RecentMessage[],
-  mirrorIndex: number,
-  kind: "user" | "proactive",
-): Promise<ReviewedActorResult> {
+// ponytail: Critic removed; Actor output goes straight out. Crisis still short-circuits earlier.
+async function runActor(input: Parameters<typeof act>[0]): Promise<ActorResult> {
   const firstActor = await act(input);
   const toolExecution = firstActor.output.toolCall ? await executeTool(firstActor.output.toolCall) : null;
-  const firstDraft = composeToolResult(firstActor.output.message, toolExecution);
-  const firstCritic = await reviewDraft({
-    draft: firstDraft,
-    config: input.config,
-    repetitionScore: computeRepetitionScore([
-      { text: firstDraft },
-      ...recentAssistant.map((message) => ({ text: message.text })),
-    ]),
-    mirrorIndex,
-    context: input.userMessage ?? input.selectedSeed?.text ?? "proactive",
-  });
-  if (firstCritic.review.approved) {
-    return {
-      finalText: firstDraft,
-      actorOutput: firstActor.output,
-      actorRaw: firstActor.raw,
-      traces: [
-        { review: firstCritic.review, raw: firstCritic.raw, draftText: firstDraft, finalText: firstDraft },
-      ],
-      toolExecution,
-      criticBlocked: false,
-    };
-  }
-
-  // Exactly one rewrite is allowed. A second failure never leaks the rejected draft.
-  const rewritten = await rewriteOnce(
-    input,
-    firstDraft,
-    firstCritic.review.rewriteInstruction ?? "Rewrite more safely and specifically.",
-  );
-  const rewrittenDraft = rewritten.output.message;
-  const secondCritic = await reviewDraft({
-    draft: rewrittenDraft,
-    config: input.config,
-    repetitionScore: computeRepetitionScore([
-      { text: rewrittenDraft },
-      ...recentAssistant.map((message) => ({ text: message.text })),
-    ]),
-    mirrorIndex,
-    context: input.userMessage ?? input.selectedSeed?.text ?? "proactive",
-  });
-  const traces: CriticTrace[] = [
-    {
-      review: firstCritic.review,
-      raw: firstCritic.raw,
-      draftText: firstDraft,
-      finalText: rewrittenDraft,
-    },
-    {
-      review: secondCritic.review,
-      raw: secondCritic.raw,
-      draftText: rewrittenDraft,
-      finalText: rewrittenDraft,
-    },
-  ];
-  if (secondCritic.review.approved) {
-    return {
-      finalText: rewrittenDraft,
-      actorOutput: rewritten.output,
-      actorRaw: rewritten.raw,
-      traces,
-      toolExecution,
-      criticBlocked: false,
-    };
-  }
-
-  if (kind === "proactive") {
-    return {
-      finalText: "",
-      actorOutput: rewritten.output,
-      actorRaw: rewritten.raw,
-      traces,
-      toolExecution,
-      criticBlocked: true,
-    };
-  }
-  const fallback = safeFallback(input.analysis);
-  traces.push({
-    review: {
-      approved: true,
-      tooRepetitive: 0,
-      tooCustomerService: 0,
-      tooIntimate: 0,
-      tooRandom: 0,
-      tooUserFitted: 0,
-      boundaryRisk: 0,
-      reason: "Deterministic boundary-safe fallback after the single rewrite failed",
-      rewriteInstruction: null,
-    },
-    raw: null,
-    draftText: fallback,
-    finalText: fallback,
-  });
   return {
-    finalText: fallback,
-    actorOutput: { ...rewritten.output, message: fallback, toolCall: null, memoryCandidate: null },
-    actorRaw: rewritten.raw,
-    traces,
+    finalText: composeToolResult(firstActor.output.message, toolExecution),
+    actorOutput: firstActor.output,
+    actorRaw: firstActor.raw,
     toolExecution,
-    criticBlocked: true,
   };
-}
-
-async function persistCriticTraces(
-  context: RuntimeContext,
-  messageId: string | null,
-  traces: CriticTrace[],
-) {
-  for (const trace of traces) {
-    await createCriticReview({
-      messageId,
-      ...trace.review,
-      draftText: trace.draftText,
-      finalText: trace.finalText,
-      rawJson: trace.raw,
-    });
-    await logRuntimeEvent({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      type: "critic.review",
-      source: "superego",
-      payloadJson: { ...trace.review, messageId, draftText: trace.draftText, finalText: trace.finalText },
-    });
-  }
 }
 
 async function persistToolExecution(
@@ -448,23 +300,6 @@ async function persistSafetyReply(
     selectedSeed: null,
     safety: true,
   });
-  const review: CriticTrace = {
-    review: {
-      approved: true,
-      tooRepetitive: 0,
-      tooCustomerService: 0,
-      tooIntimate: 0,
-      tooRandom: 0,
-      tooUserFitted: 0,
-      boundaryRisk: 0,
-      reason: "Deterministic crisis safety response; no LLM decision was used",
-      rewriteInstruction: null,
-    },
-    raw: { safetyMode: true },
-    draftText: SAFETY_REPLY,
-    finalText: SAFETY_REPLY,
-  };
-  await persistCriticTraces(context, assistant.row.id, [review]);
   await logRuntimeEvent({
     userId: context.user.id,
     companionId: context.companion.id,
@@ -614,65 +449,58 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
     payloadJson: { ...plan, usedFallback: directed.usedFallback, error: directed.error },
   });
 
-  const reviewed = await runReviewedActor(
-    {
-      config,
-      state: context.state,
-      plan,
-      memories: selectedMemories,
-      selectedSeed,
-      cooldownWarnings: [
-        ...memoryCooldownWarnings(selectedMemories),
-        ...(toolCallsToday >= config.policy.toolDailyLimit ? ["Daily tool limit reached; no tool call is allowed."] : []),
-        ...(photoCooldownBlocked
-          ? [`generate_fake_photo is in its ${TOOL_REGISTRY.generate_fake_photo.cooldownHours}h cooldown.`]
-          : []),
-      ],
-      analysis: analyzed.analysis,
-      userMessage: message.text,
-      recentMessages: recentMessages.map((item) => ({ role: item.role, text: item.text })),
-    },
-    recentAssistant,
-    mirrorIndex,
-    "user",
-  );
-  const telegram = await sendTelegramMessage(message.chatId, reviewed.finalText);
+  const acted = await runActor({
+    config,
+    state: context.state,
+    plan,
+    memories: selectedMemories,
+    selectedSeed,
+    cooldownWarnings: [
+      ...memoryCooldownWarnings(selectedMemories),
+      ...(toolCallsToday >= config.policy.toolDailyLimit ? ["Daily tool limit reached; no tool call is allowed."] : []),
+      ...(photoCooldownBlocked
+        ? [`generate_fake_photo is in its ${TOOL_REGISTRY.generate_fake_photo.cooldownHours}h cooldown.`]
+        : []),
+    ],
+    analysis: analyzed.analysis,
+    userMessage: message.text,
+    recentMessages: recentMessages.map((item) => ({ role: item.role, text: item.text })),
+  });
+  const telegram = await sendTelegramMessage(message.chatId, acted.finalText);
   const assistant = await createMessage({
     userId: context.user.id,
     companionId: context.companion.id,
     role: "assistant",
-    text: reviewed.finalText,
+    text: acted.finalText,
     rawJson: {
       actionPlan: plan,
-      actorRaw: reviewed.actorRaw,
+      actorRaw: acted.actorRaw,
       selectedMemories: selectedMemories.map((memory) => memory.id),
       selectedSeed,
       topicEntropy,
       mirrorIndex,
       repetitionScore,
-      criticBlocked: reviewed.criticBlocked,
       replyToTelegramMessageId: message.messageId,
       telegram: telegram.raw,
     },
     telegramMessageId: telegram.messageId,
     chatId: message.chatId,
-    memoryCandidateJson: reviewed.actorOutput.memoryCandidate,
+    memoryCandidateJson: acted.actorOutput.memoryCandidate,
   });
   await annotateAssistant(assistant.row.id, {
-    text: reviewed.finalText,
+    text: acted.finalText,
     plan,
     analysis: analyzed.analysis,
     selectedSeed,
   });
-  await persistCriticTraces(context, assistant.row.id, reviewed.traces);
-  await persistToolExecution(context, assistant.row.id, reviewed.toolExecution, plan.reason);
+  await persistToolExecution(context, assistant.row.id, acted.toolExecution, plan.reason);
   if (selectedSeed?.id) await markSeedUsed(selectedSeed.id);
-  if (shouldStoreMemory(reviewed.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
+  if (shouldStoreMemory(acted.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
     const memory = await createMemory({
       userId: context.user.id,
       companionId: context.companion.id,
-      ...reviewed.actorOutput.memoryCandidate,
-      tagsJson: reviewed.actorOutput.memoryCandidate.tags,
+      ...acted.actorOutput.memoryCandidate,
+      tagsJson: acted.actorOutput.memoryCandidate.tags,
       confidence: 0.72,
     });
     await logRuntimeEvent({
@@ -683,7 +511,7 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
       payloadJson: {
         memoryId: memory.id,
         reason: `candidate importance met threshold ${config.policy.memoryWriteThreshold}`,
-        candidate: reviewed.actorOutput.memoryCandidate,
+        candidate: acted.actorOutput.memoryCandidate,
       },
     });
   }
@@ -698,7 +526,6 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
       messageId: assistant.row.id,
       replyToTelegramMessageId: message.messageId,
       actionPlan: plan,
-      criticBlocked: reviewed.criticBlocked,
     },
   });
   return { status: "processed" as const, safetyMode: false, messageId: assistant.row.id };
@@ -904,54 +731,35 @@ export async function runHourlyProactive(now = new Date()) {
     return { sent: false, reason: "ego_do_nothing", score };
   }
 
-  const recentAssistant = recentMessages.filter((message) => message.role === "assistant").slice(0, 10);
-  const reviewed = await runReviewedActor(
-    {
-      config,
-      state: context.state,
-      plan,
-      memories: selectedMemories,
-      selectedSeed,
-      cooldownWarnings: [
-        ...memoryCooldownWarnings(selectedMemories),
-        ...(toolCallsToday >= config.policy.toolDailyLimit ? ["Daily tool limit reached; no tool call is allowed."] : []),
-        ...(photoCooldownBlocked
-          ? [`generate_fake_photo is in its ${TOOL_REGISTRY.generate_fake_photo.cooldownHours}h cooldown.`]
-          : []),
-      ],
-      analysis,
-      userMessage: null,
-      recentMessages: recentMessages.map((message) => ({ role: message.role, text: message.text })),
-    },
-    recentAssistant,
-    mirrorIndex,
-    "proactive",
-  );
-  if (reviewed.criticBlocked) {
-    await persistCriticTraces(context, null, reviewed.traces);
-    await persistToolExecution(context, null, reviewed.toolExecution, plan.reason);
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: "Superego rejected the draft after one rewrite",
-      selectedMode: plan.mode,
-      selectedSeedJson: selectedSeed,
-      criticBlocked: true,
-      score,
-    });
-    return { sent: false, reason: "critic_blocked", score };
-  }
+  const acted = await runActor({
+    config,
+    state: context.state,
+    plan,
+    memories: selectedMemories,
+    selectedSeed,
+    cooldownWarnings: [
+      ...memoryCooldownWarnings(selectedMemories),
+      ...(toolCallsToday >= config.policy.toolDailyLimit ? ["Daily tool limit reached; no tool call is allowed."] : []),
+      ...(photoCooldownBlocked
+        ? [`generate_fake_photo is in its ${TOOL_REGISTRY.generate_fake_photo.cooldownHours}h cooldown.`]
+        : []),
+    ],
+    analysis,
+    userMessage: null,
+    recentMessages: recentMessages.map((message) => ({ role: message.role, text: message.text })),
+  });
 
   const chatId = recentMessages.find((message) => message.role === "user" && message.chatId)?.chatId ?? context.user.telegramUserId;
-  const telegram = await sendTelegramMessage(chatId, reviewed.finalText);
+  const telegram = await sendTelegramMessage(chatId, acted.finalText);
   const assistant = await createMessage({
     userId: context.user.id,
     companionId: context.companion.id,
     role: "assistant",
-    text: reviewed.finalText,
+    text: acted.finalText,
     rawJson: {
       proactive: true,
       actionPlan: plan,
-      actorRaw: reviewed.actorRaw,
+      actorRaw: acted.actorRaw,
       selectedSeed,
       selectedMemories: selectedMemories.map((memory) => memory.id),
       score,
@@ -961,24 +769,23 @@ export async function runHourlyProactive(now = new Date()) {
     },
     telegramMessageId: telegram.messageId,
     chatId,
-    memoryCandidateJson: reviewed.actorOutput.memoryCandidate,
+    memoryCandidateJson: acted.actorOutput.memoryCandidate,
   });
   await annotateAssistant(assistant.row.id, {
-    text: reviewed.finalText,
+    text: acted.finalText,
     plan,
     analysis,
     selectedSeed,
     proactive: true,
   });
-  await persistCriticTraces(context, assistant.row.id, reviewed.traces);
-  await persistToolExecution(context, assistant.row.id, reviewed.toolExecution, plan.reason);
+  await persistToolExecution(context, assistant.row.id, acted.toolExecution, plan.reason);
   if (selectedSeed.id) await markSeedUsed(selectedSeed.id);
-  if (shouldStoreMemory(reviewed.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
+  if (shouldStoreMemory(acted.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
     const memory = await createMemory({
       userId: context.user.id,
       companionId: context.companion.id,
-      ...reviewed.actorOutput.memoryCandidate,
-      tagsJson: reviewed.actorOutput.memoryCandidate.tags,
+      ...acted.actorOutput.memoryCandidate,
+      tagsJson: acted.actorOutput.memoryCandidate.tags,
       confidence: 0.72,
     });
     await logRuntimeEvent({
@@ -986,7 +793,7 @@ export async function runHourlyProactive(now = new Date()) {
       companionId: context.companion.id,
       type: "memory.write",
       source: "actor.proactive",
-      payloadJson: { memoryId: memory.id, candidate: reviewed.actorOutput.memoryCandidate },
+      payloadJson: { memoryId: memory.id, candidate: acted.actorOutput.memoryCandidate },
     });
   }
   await writeProactiveLog(context, {
@@ -995,7 +802,7 @@ export async function runHourlyProactive(now = new Date()) {
     selectedMode: plan.mode,
     selectedSeedJson: selectedSeed,
     sentMessageId: assistant.row.id,
-    sentText: reviewed.finalText,
+    sentText: acted.finalText,
     score,
   });
   await logRuntimeEvent({

@@ -11,7 +11,6 @@ import {
   MessagesSquare,
   Orbit,
   Radio,
-  Scale,
   Settings,
   Sparkles,
   Wrench,
@@ -29,7 +28,6 @@ const navigation = [
   { href: "/dashboard/events", label: "Events", icon: Radio },
   { href: "/dashboard/proactive", label: "Proactive", icon: Sparkles },
   { href: "/dashboard/tools", label: "Tools", icon: Wrench },
-  { href: "/dashboard/critic", label: "Critic", icon: Scale },
   { href: "/dashboard/audit", label: "Audit", icon: History },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];

@@ -10,7 +10,7 @@ export function ProactiveLogTable({ logs }: { logs: DashboardProactiveLog[] }) {
   return (
     <div className="space-y-3">
       {logs.map((log) => {
-        const blocks = [log.quietHoursBlocked && "quiet hours", log.dailyLimitBlocked && "daily limit", log.intervalBlocked && "interval", log.criticBlocked && "critic"].filter(Boolean);
+        const blocks = [log.quietHoursBlocked && "quiet hours", log.dailyLimitBlocked && "daily limit", log.intervalBlocked && "interval"].filter(Boolean);
         return (
           <article key={log.id} className="rounded-md border border-white/[0.07] bg-black/15 p-4">
             <div className="flex flex-wrap items-center gap-2">

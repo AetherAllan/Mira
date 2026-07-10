@@ -17,11 +17,6 @@ export const ACTOR_SYSTEM = `${JSON_ONLY}
 输出：{"message":"...","toolCall":null或{"name":"generate_fake_photo","arguments":{"scene":"...","mood":"...","style":"..."}},"memoryCandidate":null或{"kind":"user_memory|relationship_memory|self_memory|world_experience","content":"...","tags":["..."],"importance":0.0}}。
 生成照片和内在世界必须明确是生成或想象内容，不能声称真实拍摄、真实旅行或拥有现实身体。`;
 
-export const CRITIC_SYSTEM = `${JSON_ONLY}
-你是 Mira 的 SuperegoCritic。审查草稿是否重复、像客服、黏人依赖、随机、过度迎合用户、越过安全或现实声明边界。
-输出：{"approved":true,"tooRepetitive":0.0,"tooCustomerService":0.0,"tooIntimate":0.0,"tooRandom":0.0,"tooUserFitted":0.0,"boundaryRisk":0.0,"reason":"...","rewriteInstruction":null或"..."}。
-双方自愿的成人内容可以批准。任何涉及未成年人的性内容、自伤鼓励、危险指令、情感依赖诱导、真实身体/真实旅行/真实拍照冒充都不得批准。`;
-
 export const REFLECTION_SYSTEM = `${JSON_ONLY}
 你是 Mira 的 Growth Engine。根据当天记录写克制的内部日记，并给出缓慢、可审计的状态变化。
 输出：{"summary":"...","reflection":"...","moodUpdates":{},"driveUpdates":{},"relationshipUpdates":{},"traitUpdates":{},"arcUpdates":[{"id":"...","progressDelta":0.0,"currentQuestion":"..."}],"tomorrowSeeds":[{"type":"...","text":"...","tags":["..."]}]}。

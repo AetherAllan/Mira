@@ -104,13 +104,3 @@ export async function act(input: ActorPromptInput) {
   });
   return { output: result.data, raw: result.raw, usedFallback: result.usedFallback, error: result.error };
 }
-
-export async function rewriteOnce(input: ActorPromptInput, draft: string, instruction: string) {
-  const rewrittenInput: ActorPromptInput = {
-    ...input,
-    plan: { ...input.plan, toolAllowed: false },
-    draft,
-    rewriteInstruction: instruction,
-  };
-  return act(rewrittenInput);
-}

@@ -6,7 +6,7 @@ const modules = [
   { name: "ID", value: "drives", icon: Radio },
   { name: "EGO", value: "direction", icon: BrainCircuit },
   { name: "MEM", value: "selective", icon: Database },
-  { name: "SAFE", value: "critic", icon: ShieldCheck },
+  { name: "SAFE", value: "crisis", icon: ShieldCheck },
 ];
 
 export default function HomePage() {

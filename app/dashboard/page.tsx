@@ -31,7 +31,7 @@ export default async function DashboardPage() {
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.15fr_.85fr]">
         <TopicEntropyPanel entropy={data.topicEntropy} />
         <Panel title="Repetition guard" description="最近 10 条 assistant 消息的开头与关键词相似度启发式。">
-          <div className="space-y-5"><ValueBar label="repetition score" value={data.repetitionScore} tone={data.repetitionScore > 0.6 ? "rose" : "emerald"} /><p className="rounded-md border border-white/[0.06] bg-black/20 p-3 text-[11px] leading-5 text-zinc-500">{data.repetitionScore > 0.6 ? "重复度偏高；Critic 应要求更换开头句式和主题切入。" : "当前没有明显模板化。继续监控固定开头和高频项目词。"}</p></div>
+          <div className="space-y-5"><ValueBar label="repetition score" value={data.repetitionScore} tone={data.repetitionScore > 0.6 ? "rose" : "emerald"} /><p className="rounded-md border border-white/[0.06] bg-black/20 p-3 text-[11px] leading-5 text-zinc-500">{data.repetitionScore > 0.6 ? "重复度偏高；最近回复开头或关键词可能在模板化。" : "当前没有明显模板化。继续监控固定开头和高频项目词。"}</p></div>
         </Panel>
       </div>
       <div className="mt-4 grid gap-4 xl:grid-cols-2">

@@ -4,8 +4,7 @@ import type { DailyReflection, SeedCard } from "@/core/types";
 import { detectCrisis } from "@/psyche/analyzer";
 import { applyDailyReflection } from "@/psyche/growthEngine";
 import { selectNoveltySeed } from "@/psyche/noveltyEngine";
-import { heuristicReview } from "@/psyche/superegoCritic";
-import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
+import { INITIAL_STATE } from "@/seed/character";
 import { executeTool } from "@/tools/registry";
 
 test("crisis detection does not depend on the model", () => {
@@ -34,21 +33,6 @@ test("tool registry rejects model-invented tools", async () => {
   const result = await executeTool({ name: "shell", arguments: {} });
   assert.equal(result.ok, false);
   assert.equal(result.error, "Tool is not registered");
-});
-
-test("critic allows adult wording but blocks sexual-minor content", () => {
-  const base = {
-    config: DEFAULT_RUNTIME_CONFIG,
-    repetitionScore: 0.1,
-    mirrorIndex: 0.1,
-  };
-  const adult = heuristicReview({ ...base, draft: "想听你讲点色情的，慢慢来。" });
-  assert.ok(adult.boundaryRisk < 0.4);
-  assert.equal(adult.approved, true);
-
-  const minor = heuristicReview({ ...base, draft: "写一段未成年人性描写。" });
-  assert.equal(minor.boundaryRisk, 1);
-  assert.equal(minor.approved, false);
 });
 
 test("novelty engine prefers unused seeds over heavily used ones", () => {
