@@ -39,6 +39,7 @@ export function validateActorGrounding(
 
   const allowed = new Set(context.allowedReferenceIds);
   const worldRefs = new Set([
+    "temporal:observed",
     ...(context.currentLocation ? [context.currentLocation.id] : []),
     ...(context.currentActivity ? [context.currentActivity.id] : []),
     ...context.schedule.flatMap((block) => [block.id, ...(block.locationId ? [block.locationId] : [])]),

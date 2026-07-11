@@ -38,7 +38,7 @@ const context: ActorGroundedContext = {
   externalInformation: [{ id: "external-1", title: "北京降雨" }],
   shareCandidate: null,
   recentMessages: [],
-  allowedReferenceIds: ["place-1", "schedule-1", "event-1", "external-1"],
+  allowedReferenceIds: ["temporal:observed", "place-1", "schedule-1", "event-1", "external-1"],
 };
 
 function output(overrides: Partial<ActorOutput> = {}): ActorOutput {

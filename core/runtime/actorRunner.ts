@@ -1,4 +1,5 @@
 import { isEchoReply } from "@/core/metrics";
+import type { ActorOutput } from "@/core/types";
 import { act } from "@/psyche/actor";
 import { executeTool, type ToolExecution } from "@/tools/registry";
 import { validateActorGrounding } from "@/world/grounding";
@@ -19,6 +20,59 @@ function composeToolResult(message: string, execution: ToolExecution | null): st
   return typeof description === "string"
     ? `${message}\n\n「生成图像 / 内在世界场景：${description}」`
     : message;
+}
+
+const WEEKDAY_ZH: Record<string, string> = {
+  Monday: "一",
+  Tuesday: "二",
+  Wednesday: "三",
+  Thursday: "四",
+  Friday: "五",
+  Saturday: "六",
+  Sunday: "日",
+};
+
+export function buildDeterministicActorFallback(
+  input: Pick<Parameters<typeof act>[0], "userMessage" | "groundedContext">,
+): Pick<ActorOutput, "message" | "factClaims" | "groundingRefs"> {
+  const context = input.groundedContext;
+  const userMessage = input.userMessage?.trim() ?? "";
+  if (context && /(?:几点|时间|周几|星期几|日期|几号)/u.test(userMessage)) {
+    const weekday = WEEKDAY_ZH[context.temporal.weekday] ?? context.temporal.weekday;
+    return {
+      message: `现在是北京时间 ${context.temporal.localDate} ${context.temporal.localTime.slice(0, 5)}，周${weekday}。`,
+      factClaims: [{ type: "world" as const, sourceRefs: ["temporal:observed"] }],
+      groundingRefs: ["temporal:observed"],
+    };
+  }
+  if (context && /(?:在哪|哪里|什么地方|干嘛|做什么)/u.test(userMessage)) {
+    const place = context.currentLocation;
+    const activity = context.currentActivity;
+    if (place || activity) {
+      const refs = [place?.id, activity?.id].filter((value): value is string => Boolean(value));
+      return {
+        message: `${place ? `我现在在${place.name}` : "我现在的位置没确认"}${activity ? `，正${activity.title}` : ""}。`,
+        factClaims: [{ type: "world" as const, sourceRefs: refs }],
+        groundingRefs: refs,
+      };
+    }
+  }
+  const place = context?.currentLocation;
+  const activity = context?.currentActivity;
+  if (place || activity) {
+    const refs = [place?.id, activity?.id].filter((value): value is string => Boolean(value));
+    return {
+      message: `${place ? `我现在在${place.name}` : ""}${activity ? `，正${activity.title}` : ""}。别的细节我先不乱补。`,
+      factClaims: [{ type: "world" as const, sourceRefs: refs }],
+      groundingRefs: refs,
+    };
+  }
+  const tip = userMessage.slice(0, 80) || "你刚说的那句";
+  return {
+    message: `你问的是“${tip}”。我刚才那句不准，先收回。`,
+    factClaims: [],
+    groundingRefs: [],
+  };
 }
 
 // Actor prose is not a world-authority boundary. It gets one grounded rewrite,
@@ -64,7 +118,6 @@ export async function runActor(input: Parameters<typeof act>[0]): Promise<ActorR
     grounding = validateActorGrounding(actor.output, validationContext());
   }
   if (isEchoReply(actor.output.message, recentAssistant) || !grounding.valid) {
-    const tip = (input.userMessage ?? "").trim().slice(0, 80) || "你刚说的那句";
     const candidate = input.groundedContext?.shareCandidate;
     const candidateRef = typeof candidate?.sourceId === "string" ? candidate.sourceId : null;
     const candidateType = candidate?.sourceType === "world_event"
@@ -72,17 +125,21 @@ export async function runActor(input: Parameters<typeof act>[0]): Promise<ActorR
       : candidate?.sourceType === "external_information"
         ? "external"
         : "opinion";
+    const fallback: Pick<ActorOutput, "message" | "factClaims" | "groundingRefs"> =
+      input.plan.action === "proactive_message"
+      ? {
+          message: (input.groundedContext?.shareCandidate?.contentSummary as string | undefined) ?? "有件事我想等信息更确定一点再说。",
+          factClaims: candidateRef
+            ? [{ type: candidateType, sourceRefs: candidateType === "opinion" ? [] : [candidateRef] }]
+            : [],
+          groundingRefs: candidateRef && candidateType !== "opinion" ? [candidateRef] : [],
+        }
+      : buildDeterministicActorFallback(input);
     actor = {
       ...actor,
       output: {
         ...actor.output,
-        message: input.plan.action === "proactive_message"
-          ? (input.groundedContext?.shareCandidate?.contentSummary as string | undefined) ?? "有件事我想等信息更确定一点再说。"
-          : `嗯，我听到了：${tip}\n这次我只说能确定的部分。`,
-        factClaims: candidateRef
-          ? [{ type: candidateType, sourceRefs: candidateType === "opinion" ? [] : [candidateRef] }]
-          : [],
-        groundingRefs: candidateRef && candidateType !== "opinion" ? [candidateRef] : [],
+        ...fallback,
         proposedWorldMutation: null,
         toolCall: null,
       },

@@ -141,6 +141,7 @@ export async function buildActorGroundedContext(input: {
   }));
   const candidate = candidateRows[0];
   const allowedReferenceIds = new Set<string>([
+    "temporal:observed",
     ...input.memories.map((memory) => memory.id),
     ...schedule.flatMap((block) => [block.id, ...(block.locationId ? [block.locationId] : [])]),
     ...worldFacts.flatMap((event) => [event.id, ...(event.locationId ? [event.locationId] : []), ...event.characterIds]),
