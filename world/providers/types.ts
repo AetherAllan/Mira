@@ -9,7 +9,7 @@ export interface GeoPoint {
 }
 
 export interface ProviderPlace {
-  provider: "google";
+  provider: "google" | "osm";
   providerId: string;
   name: string;
   category: string;
@@ -22,7 +22,7 @@ export interface ProviderPlace {
 export type ProviderRouteMode = "walking" | "bicycling" | "transit";
 
 export interface ProviderRoute {
-  provider: "google";
+  provider: "google" | "osm";
   mode: ProviderRouteMode;
   origin: GeoPoint;
   destination: GeoPoint;
@@ -32,7 +32,7 @@ export interface ProviderRoute {
 }
 
 export interface ProviderCurrentWeather {
-  provider: "qweather";
+  provider: "qweather" | "open_meteo";
   observedAt: string | null;
   updatedAt: string | null;
   condition: string;

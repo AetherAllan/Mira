@@ -89,7 +89,7 @@ export interface KnownPlace {
   companionId: string;
   canonicalKey: string;
   // AMap is historical-data compatibility only; the active provider is Google.
-  provider: "google" | "amap" | "baidu" | "manual";
+  provider: "google" | "osm" | "amap" | "baidu" | "manual";
   providerPoiId?: string;
   status: "known" | "want_to_visit" | "visited" | "avoided" | "archived";
   coordinateSystem: "gcj02" | "wgs84" | "bd09" | "unknown";

@@ -185,6 +185,8 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron/daily
 - [Google Routes](https://developers.google.com/maps/documentation/routes/compute_route_directions)：步行、骑行和公共交通可行性；缓存 30 分钟。
 - [Google Static Maps](https://developers.google.com/maps/documentation/maps-static/start)：仅后台服务端代理；客户端看不到 key。
 - QWeather：当前天气和预警，缓存 30 分钟；雨雪等风险只影响 12 小时内的日程。
+- Open-Meteo：无 key 天气 fallback；仅在 ingestion 开启时使用，缓存 30 分钟并保留 attribution。
+- OpenStreetMap Nominatim / OSRM：Google 失败时提供低频地点与步行/骑行路线 fallback；每实例最多每秒一次并继续使用持久缓存。公共 OSRM 不提供公交路线。
 - GDELT：北京、本地生活、科技和游戏新闻候选，缓存 2 小时。
 - OpenRouter `nvidia/llama-nemotron-embed-vl-1b-v2:free`：请求 1024 维输出，用于外部信息去重。
 

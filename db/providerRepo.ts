@@ -140,8 +140,8 @@ export async function persistDiscoveredPlaces(input: {
         .insert(knownPlaces)
         .values({
           companionId: input.companionId,
-          canonicalKey: `google:${candidate.providerId}`,
-          provider: "google",
+          canonicalKey: `${candidate.provider}:${candidate.providerId}`,
+          provider: candidate.provider,
           providerPoiId: candidate.providerId,
           status: "known",
           coordinateSystem: "wgs84",
@@ -165,7 +165,7 @@ export async function persistDiscoveredPlaces(input: {
           .where(
             and(
               eq(knownPlaces.companionId, input.companionId),
-              eq(knownPlaces.provider, "google"),
+              eq(knownPlaces.provider, candidate.provider),
               eq(knownPlaces.providerPoiId, candidate.providerId),
             ),
           )

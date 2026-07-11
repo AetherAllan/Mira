@@ -93,6 +93,7 @@ Definite Telegram failures may follow bounded retry policy. A network timeout af
 
 - Google Places: 7-day cache; Google Routes: 30-minute cache.
 - QWeather: 30-minute cache; GDELT: 2-hour cache.
+- Open-Meteo is the no-key weather fallback. Nominatim and public OSRM are best-effort map fallbacks, serialized to one request per second per instance and cached with the same place/route TTLs.
 - Native fetch timeout and one retry for 429/5xx.
 - `Promise.allSettled` keeps one failed provider from blocking the world.
 - `nvidia/llama-nemotron-embed-vl-1b-v2:free` embeddings request 1024 dimensions and are batched for external-information dedupe.

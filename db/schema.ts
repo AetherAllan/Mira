@@ -260,7 +260,7 @@ export const knownPlaces = pgTable(
     canonicalKey: text("canonical_key").notNull(),
     // `amap` remains readable for rows created by older releases. New runtime
     // discovery uses Google Maps and never creates new AMap rows.
-    provider: text("provider", { enum: ["google", "amap", "baidu", "manual"] }).notNull(),
+    provider: text("provider", { enum: ["google", "osm", "amap", "baidu", "manual"] }).notNull(),
     providerPoiId: text("provider_poi_id"),
     status: text("status", {
       enum: ["known", "want_to_visit", "visited", "avoided", "archived"],
