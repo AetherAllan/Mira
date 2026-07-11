@@ -24,7 +24,8 @@
     "cron:daily": "bun scripts/run-cron.ts daily",
     "cron:world": "bun scripts/run-cron.ts world",
     "cron:outbox": "bun scripts/run-cron.ts outbox",
-    "demo:world": "bun scripts/demo-world.ts"
+    "demo:world": "bun scripts/demo-world.ts",
+    "simulate:world": "bun scripts/simulate-world.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "1.3.0",
