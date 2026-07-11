@@ -6,7 +6,7 @@ import { detectCrisis } from "@/psyche/analyzer";
 import { applyDailyReflection } from "@/psyche/growthEngine";
 import { selectNoveltySeed } from "@/psyche/noveltyEngine";
 import { INITIAL_STATE } from "@/seed/character";
-import { splitTelegramBubbles } from "@/telegram/client";
+import { splitTelegramBubbles } from "@/messaging/bubbles";
 import { executeTool } from "@/tools/registry";
 
 test("crisis detection does not depend on the model", () => {

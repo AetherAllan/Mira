@@ -22,7 +22,7 @@ import {
   stateChanges,
   toolCalls,
 } from "@/db/schema";
-import { splitTelegramBubbles } from "@/telegram/client";
+import { splitTelegramBubbles } from "@/messaging/bubbles";
 
 export type StateChangeInput = {
   targetPath: string;
