@@ -693,6 +693,79 @@ export const awaitingReplies = pgTable(
   ],
 );
 
+export const externalInformation = pgTable(
+  "external_information",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    sourceName: text("source_name").notNull(),
+    sourceUrl: text("source_url"),
+    title: text("title").notNull(),
+    factualSummary: text("factual_summary").notNull(),
+    category: text("category").notNull(),
+    factsJson: jsonb("facts_json").$type<Record<string, unknown>>().notNull().default({}),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+    beijingRelevance: real("beijing_relevance").notNull().default(0),
+    personalRelevance: real("personal_relevance").notNull().default(0),
+    reliability: real("reliability").notNull().default(0.5),
+    novelty: real("novelty").notNull().default(0.5),
+    duplicateGroupId: uuid("duplicate_group_id"),
+    status: text("status", { enum: ["new", "processed", "ignored", "expired"] })
+      .notNull()
+      .default("new"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    embedding: vector("embedding", { dimensions: 1024 }),
+    correlationId: uuid("correlation_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("external_information_companion_idempotency_idx").on(
+      table.companionId,
+      table.idempotencyKey,
+    ),
+    index("external_information_companion_status_fetched_idx").on(
+      table.companionId,
+      table.status,
+      table.fetchedAt,
+    ),
+    index("external_information_companion_category_published_idx").on(
+      table.companionId,
+      table.category,
+      table.publishedAt,
+    ),
+  ],
+);
+
+export const providerCache = pgTable(
+  "provider_cache",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    cacheKey: text("cache_key").notNull(),
+    payloadJson: jsonb("payload_json").notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("provider_cache_companion_provider_key_idx").on(
+      table.companionId,
+      table.provider,
+      table.cacheKey,
+    ),
+    index("provider_cache_expires_idx").on(table.expiresAt),
+  ],
+);
+
 export const worldTickRuns = pgTable(
   "world_tick_runs",
   {
@@ -938,5 +1011,7 @@ export type ConversationWorkingMemoryRow = typeof conversationWorkingMemories.$i
 export type InnerThoughtRow = typeof innerThoughts.$inferSelect;
 export type ShareCandidateRow = typeof shareCandidates.$inferSelect;
 export type AwaitingReplyRow = typeof awaitingReplies.$inferSelect;
+export type ExternalInformationRow = typeof externalInformation.$inferSelect;
+export type ProviderCacheRow = typeof providerCache.$inferSelect;
 export type WorldTickRunRow = typeof worldTickRuns.$inferSelect;
 export type ProposedWorldMutationRow = typeof proposedWorldMutations.$inferSelect;

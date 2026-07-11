@@ -287,6 +287,26 @@ export interface AwaitingReply {
   resolvedAt?: Date;
 }
 
+export interface ExternalInformation {
+  id: string;
+  companionId: string;
+  sourceName: string;
+  sourceUrl?: string;
+  title: string;
+  factualSummary: string;
+  category: string;
+  facts: Record<string, unknown>;
+  publishedAt?: Date;
+  fetchedAt: Date;
+  beijingRelevance: number;
+  personalRelevance: number;
+  reliability: number;
+  novelty: number;
+  duplicateGroupId?: string;
+  status: "new" | "processed" | "ignored" | "expired";
+  expiresAt?: Date;
+}
+
 export interface WorldStateChange {
   targetPath: string;
   before: number | string | null;

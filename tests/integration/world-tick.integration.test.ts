@@ -5,12 +5,18 @@ import { closeDb, getDb } from "@/db/client";
 import {
   awaitingReplies,
   companions,
+  externalInformation,
   messages,
   shareCandidates,
   users,
   worldStates,
   worldTickRuns,
 } from "@/db/schema";
+import {
+  getCachedProviderValue,
+  persistExternalFacts,
+  setCachedProviderValue,
+} from "@/db/providerRepo";
 import {
   processAwaitingReplyTimeouts,
   resolveAwaitingReplies,
@@ -118,6 +124,68 @@ test(
       });
       const workingMemory = await getConversationWorkingMemory(companion.id);
       assert.ok(workingMemory?.userCommitmentsJson.length);
+
+      const cacheTime = new Date("2026-07-10T04:00:00.000Z");
+      await setCachedProviderValue({
+        companionId: companion.id,
+        provider: "fixture",
+        cacheKey: "weather:beijing",
+        payload: { condition: "小雨" },
+        fetchedAt: cacheTime,
+        expiresAt: new Date(cacheTime.getTime() + 30 * 60_000),
+      });
+      assert.deepEqual(
+        await getCachedProviderValue({
+          companionId: companion.id,
+          provider: "fixture",
+          cacheKey: "weather:beijing",
+          now: new Date(cacheTime.getTime() + 1_000),
+        }),
+        { condition: "小雨" },
+      );
+      const embedding = [1, ...Array<number>(1023).fill(0)];
+      const externalWrite = await persistExternalFacts({
+        companionId: companion.id,
+        fetchedAt: cacheTime,
+        correlationId: "00000000-0000-4000-8000-000000000106",
+        drafts: [
+          {
+            sourceName: "fixture-news",
+            sourceUrl: "https://example.test/beijing-rain?utm_source=test",
+            title: "北京降雨改变周五出行",
+            factualSummary: "北京市周五有降雨。",
+            category: "beijing_news",
+            facts: { rain: true },
+            beijingRelevance: 1,
+            personalRelevance: 0.8,
+            reliability: 0.8,
+            novelty: 0.8,
+            embedding,
+          },
+          {
+            sourceName: "fixture-news-2",
+            sourceUrl: "https://example.test/weather-follow-up",
+            title: "周五出行天气变化",
+            factualSummary: "同一场降雨的后续报道。",
+            category: "beijing_news",
+            facts: { rain: true },
+            beijingRelevance: 1,
+            personalRelevance: 0.7,
+            reliability: 0.7,
+            novelty: 0.7,
+            embedding,
+          },
+        ],
+      });
+      assert.deepEqual(externalWrite, { inserted: 2, duplicates: 1 });
+      const externalRows = await db
+        .select({ status: externalInformation.status })
+        .from(externalInformation)
+        .where(eq(externalInformation.companionId, companion.id));
+      assert.deepEqual(
+        externalRows.map((row) => row.status).sort(),
+        ["ignored", "new"],
+      );
 
       const [candidate] = await db
         .insert(shareCandidates)

@@ -50,6 +50,13 @@
       "when": 1783746963111,
       "tag": "0006_awaiting_replies",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783747657476,
+      "tag": "0007_beijing_providers",
+      "breakpoints": true
     }
   ]
 }

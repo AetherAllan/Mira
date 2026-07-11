@@ -11,6 +11,7 @@ import {
   worldStateRowToDomain,
 } from "@/db/worldRepo";
 import { processAwaitingReplyTimeouts } from "@/db/awaitingReplyRepo";
+import { ingestBeijingExternalInformation } from "@/world/providers/service";
 import { zonedDateKey } from "@/lib/time";
 import { DEFAULT_CHARACTER_PROFILE } from "@/seed/world";
 import {
@@ -56,6 +57,7 @@ type CompanionTickResult = {
   status: "advanced" | "up_to_date" | "busy" | "failed";
   error?: string;
   awaitingRepliesProcessed?: number;
+  externalIngestion?: { status: string; inserted: number; failures: string[] };
 };
 
 function profileOrDefault(value: CharacterProfile | undefined) {
@@ -412,6 +414,21 @@ export async function runWorldTick(now = new Date()) {
   // avoids competing row locks and makes audit order deterministic.
   for (const companion of companions) {
     try {
+      // Provider I/O happens before the tick transaction. A timeout or provider
+      // outage is recorded but must not prevent deterministic schedule progress.
+      const ingestionCorrelationId = deterministicUuid(
+        createWorldSeed(companion.id, completedEnd.toISOString(), "external-ingestion"),
+      );
+      const ingestion = await ingestBeijingExternalInformation(
+        companion.id,
+        ingestionCorrelationId,
+        completedEnd,
+      ).catch((error) => ({
+        status: "failed" as const,
+        inserted: 0,
+        duplicates: 0,
+        failures: [error instanceof Error ? error.message : String(error)],
+      }));
       const result = await runCompanionTick(companion, completedEnd);
       const awaiting = await processAwaitingReplyTimeouts(
         companion.id,
@@ -420,7 +437,15 @@ export async function runWorldTick(now = new Date()) {
           createWorldSeed(companion.id, completedEnd.toISOString(), "awaiting-reply-tick"),
         ),
       );
-      results.push({ ...result, awaitingRepliesProcessed: awaiting.processed });
+      results.push({
+        ...result,
+        awaitingRepliesProcessed: awaiting.processed,
+        externalIngestion: {
+          status: ingestion.status,
+          inserted: ingestion.inserted,
+          failures: ingestion.failures,
+        },
+      });
     } catch (error) {
       results.push({
         companionId: companion.id,
