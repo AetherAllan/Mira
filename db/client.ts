@@ -20,3 +20,9 @@ export function getDb() {
   database = drizzle(client, { schema });
   return database;
 }
+
+export async function closeDb() {
+  if (client) await client.end({ timeout: 5 });
+  client = undefined;
+  database = undefined;
+}

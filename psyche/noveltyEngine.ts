@@ -25,6 +25,7 @@ export function selectNoveltySeed(
     mirrorIndex?: number;
     required?: boolean;
     random?: number;
+    selectionRandom?: number;
     now?: Date;
   },
 ): SeedCard | null {
@@ -49,7 +50,7 @@ export function selectNoveltySeed(
     weight: seedWeight(seed, { analysis: options.analysis, mirrorIndex: options.mirrorIndex, now }),
   }));
   const total = weighted.reduce((sum, item) => sum + item.weight, 0);
-  let cursor = Math.random() * total;
+  let cursor = (options.selectionRandom ?? random) * total;
   for (const item of weighted) {
     cursor -= item.weight;
     if (cursor <= 0) return item.seed;

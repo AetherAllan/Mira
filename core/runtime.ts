@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ActionPlan,
   CompanionState,
@@ -12,28 +13,29 @@ import {
   completeMessageProcessing,
   countTodayToolCalls,
   createAnnotation,
-  createMemory,
   createMessage,
   createProactiveLog,
-  createStateChange,
-  createToolCall,
   findAssistantReply,
+  findProactiveLogByIdempotencyKey,
   finishMessageProcessing,
   getCompanionState,
   getProactiveStats,
   getRuntimeContext,
   getToolStats,
-  hasMessageProcessingClaim,
   listAvailableMemories,
   listEnabledSeeds,
   listRecentAnnotations,
   listRecentMessages,
   listTodayActivity,
-  markSeedUsed,
-  updateCompanionStateIfCurrent,
+  renewMessageProcessing,
   updateProactiveLog,
   useMemories,
 } from "@/db/repo";
+import {
+  enqueueAssistantMessage,
+  listMessageOutbox,
+  type EnqueueAssistantInput,
+} from "@/db/messageOutboxRepo";
 import { logRuntimeEvent } from "@/core/eventLog";
 import {
   computeMirrorIndex,
@@ -60,14 +62,12 @@ import {
   shouldStoreMemory,
 } from "@/psyche/memory";
 import { selectNoveltySeed } from "@/psyche/noveltyEngine";
-import { sendTelegramMessage } from "@/telegram/client";
+import { drainTelegramOutbox } from "@/messaging/outbox";
 import type { TelegramTextMessage } from "@/telegram/webhook";
 import { executeTool, TOOL_REGISTRY, type ToolExecution } from "@/tools/registry";
 
 type RuntimeContext = NonNullable<Awaited<ReturnType<typeof getRuntimeContext>>>;
 type RecentMessage = Awaited<ReturnType<typeof listRecentMessages>>[number];
-
-const stateQueues = new Map<string, Promise<void>>();
 
 interface ActorResult {
   finalText: string;
@@ -152,8 +152,7 @@ function userTopicNames(annotations: Array<{ topicsJson: unknown; messageRole?: 
   );
 }
 
-async function annotateAssistant(
-  messageId: string,
+function buildAssistantAnnotation(
   input: {
     text: string;
     plan: ActionPlan;
@@ -172,9 +171,8 @@ async function annotateAssistant(
         ]
       : input.analysis.topics;
   const uniqueTopics = [...new Map(topics.map((topic) => [topic.name, topic])).values()].slice(0, 8);
-  return createAnnotation({
-    messageId,
-    topicsJson: uniqueTopics.length ? uniqueTopics : [{ name: "daily_life", confidence: 0.5 }],
+  return {
+    topics: uniqueTopics.length ? uniqueTopics : [{ name: "daily_life", confidence: 0.5 }],
     emotion: input.safety
       ? "concerned"
       : input.plan.mode === "emotional_support"
@@ -184,69 +182,39 @@ async function annotateAssistant(
     importance: input.safety ? 1 : input.proactive ? 0.48 : Math.max(0.35, input.analysis.importance * 0.8),
     novelty: input.selectedSeed ? 0.72 : Math.min(0.65, input.analysis.novelty),
     summary: input.text.length > 120 ? `${input.text.slice(0, 117)}...` : input.text,
-  });
+  } satisfies MessageAnalysis;
 }
 
-async function persistState(
-  context: RuntimeContext,
-  changes: StateChangeDraft[],
+function deterministicRoll(...parts: Array<string | number | Date>) {
+  const input = parts.map((part) => (part instanceof Date ? part.toISOString() : String(part))).join(":" );
+  return createHash("sha256").update(input).digest().readUInt32BE(0) / 0x1_0000_0000;
+}
+
+function toolCallWrite(execution: ToolExecution | null, reason: string) {
+  if (!execution) return null;
+  return {
+    toolName: execution.toolName,
+    argsJson: execution.args,
+    resultJson: execution.ok ? execution.result : { error: execution.error },
+    reason,
+  };
+}
+
+async function enqueueWithStateRetry(
+  companionId: string,
+  input: Omit<EnqueueAssistantInput, "stateMutation">,
+  applyGrowth: (state: CompanionState) => { state: CompanionState; changes: StateChangeDraft[] },
 ) {
-  if (!changes.length) return;
-  const companionId = context.companion.id;
-  const previous = stateQueues.get(companionId) ?? Promise.resolve();
-  let release = () => {};
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  const tail = previous.then(() => current);
-  stateQueues.set(companionId, tail);
-  await previous;
-
-  try {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const latest = await getCompanionState(companionId);
-      const next = structuredClone(latest);
-      const rebasedChanges = changes.map((change) => {
-        const path = change.targetPath as keyof Pick<
-          CompanionState,
-          "traits" | "mood" | "drives" | "relationship"
-        >;
-        const delta = asObject(change.deltaJson);
-        const currentGroup = asObject(next[path]);
-        if (!delta || !currentGroup) return change;
-
-        const before = { ...currentGroup };
-        for (const [key, value] of Object.entries(delta)) {
-          if (typeof value === "number" && typeof currentGroup[key] === "number") {
-            currentGroup[key] = Math.min(1, Math.max(0, currentGroup[key] + value));
-          }
-        }
-        return { ...change, beforeJson: before, afterJson: { ...currentGroup } };
-      });
-
-      const updated = await updateCompanionStateIfCurrent(companionId, latest, next);
-      if (!updated) continue;
-      for (const change of rebasedChanges) {
-        await createStateChange({ companionId, ...change });
-        await logRuntimeEvent({
-          userId: context.user.id,
-          companionId,
-          type: "state.change",
-          source: change.causedBy,
-          payloadJson: {
-            targetPath: change.targetPath,
-            before: change.beforeJson,
-            after: change.afterJson,
-            delta: change.deltaJson,
-            reason: change.reason,
-          },
-        });
-      }
-      return;
-    }
-    throw new Error("Companion state changed too often; retry the operation");
-  } finally {
-    release();
-    if (stateQueues.get(companionId) === tail) stateQueues.delete(companionId);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const latest = await getCompanionState(companionId);
+    const growth = applyGrowth(latest);
+    const result = await enqueueAssistantMessage({
+      ...input,
+      stateMutation: { expected: latest, next: growth.state, changes: growth.changes },
+    });
+    if (!result.conflict) return result;
   }
+  throw new Error("Companion state changed too often before reply enqueue");
 }
 
 function composeToolResult(message: string, execution: ToolExecution | null): string {
@@ -297,36 +265,13 @@ async function runActor(input: Parameters<typeof act>[0]): Promise<ActorResult> 
   };
 }
 
-async function persistToolExecution(
-  context: RuntimeContext,
-  messageId: string | null,
-  execution: ToolExecution | null,
-  reason: string,
-) {
-  if (!execution) return;
-  await createToolCall({
-    companionId: context.companion.id,
-    messageId,
-    toolName: execution.toolName,
-    argsJson: execution.args,
-    resultJson: execution.ok ? execution.result : { error: execution.error },
-    reason,
-  });
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "tool.call",
-    source: "actor",
-    payloadJson: { ...execution, messageId, reason },
-  });
-}
-
 async function persistSafetyReply(
   context: RuntimeContext,
   message: TelegramTextMessage,
   analysis: MessageAnalysis,
   userMessageId: string,
-  processingStartedAt: Date,
+  leaseToken: string,
+  correlationId: string,
 ) {
   const plan: ActionPlan = {
     action: "reply",
@@ -345,44 +290,46 @@ async function persistSafetyReply(
     source: "safety",
     payloadJson: plan,
   });
-  if (!await hasMessageProcessingClaim(userMessageId, processingStartedAt)) {
-    throw new Error("Telegram processing lease was replaced before send");
-  }
-  const telegram = await sendTelegramMessage(message.chatId, SAFETY_REPLY);
-  const assistant = await createMessage({
+  const assistant = await enqueueWithStateRetry(
+    context.companion.id,
+    {
     userId: context.user.id,
     companionId: context.companion.id,
-    role: "assistant",
+    chatId: message.chatId,
     text: SAFETY_REPLY,
     rawJson: {
       safetyMode: true,
       actionPlan: plan,
       replyToTelegramMessageId: message.messageId,
-      telegram: telegram.raw,
     },
-    telegramMessageId: telegram.messageId,
-    chatId: message.chatId,
-  });
-  await annotateAssistant(assistant.row.id, {
-    text: SAFETY_REPLY,
-    plan,
-    analysis,
-    selectedSeed: null,
-    safety: true,
-  });
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "assistant.message",
-    source: "safety",
-    payloadJson: { messageId: assistant.row.id, analysis, actionPlan: plan },
-  });
-  const growth = applyInteractionGrowth(context.state, analysis);
-  await persistState(context, growth.changes);
-  return { status: "processed" as const, safetyMode: true, messageId: assistant.row.id };
+    correlationId,
+    sourceType: "safety",
+    sourceId: userMessageId,
+    idempotencyBase: `reply:${userMessageId}`,
+    replyToMessageId: userMessageId,
+    processing: { messageId: userMessageId, leaseToken },
+    annotation: buildAssistantAnnotation({
+      text: SAFETY_REPLY,
+      plan,
+      analysis,
+      selectedSeed: null,
+      safety: true,
+    }),
+    },
+    (state) => applyInteractionGrowth(state, analysis),
+  );
+  if (!assistant.message) throw new Error("Failed to enqueue safety reply");
+  const delivery = await drainTelegramOutbox(assistant.message.id);
+  return {
+    status: "processed" as const,
+    safetyMode: true,
+    messageId: assistant.message.id,
+    delivery,
+  };
 }
 
 export async function handleTelegramMessage(message: TelegramTextMessage) {
+  const correlationId = randomUUID();
   const context = await bootstrapCompanion({
     telegramUserId: message.userId,
     displayName: message.displayName,
@@ -395,13 +342,12 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
     rawJson: message.raw,
     telegramMessageId: message.messageId,
     chatId: message.chatId,
+    correlationId,
+    sourceType: "telegram_inbound",
+    sourceId: `${message.chatId}:${message.messageId}`,
     processingStatus: "received",
   });
-  if (await findAssistantReply(
-    context.companion.id,
-    message.chatId,
-    message.messageId,
-  )) {
+  if (await findAssistantReply(userMessage.row.id)) {
     await completeMessageProcessing(userMessage.row.id);
     return { status: "duplicate" as const };
   }
@@ -412,21 +358,20 @@ export async function handleTelegramMessage(message: TelegramTextMessage) {
       ? { status: "duplicate" as const }
       : { status: "in_progress" as const };
   }
-  if (!claim.processingStartedAt) throw new Error("Telegram processing claim has no timestamp");
+  if (!claim.processingLeaseToken) throw new Error("Telegram processing claim has no lease token");
 
   try {
-    const result = await processTelegramMessage(
+    return await processTelegramMessage(
       context,
       userMessage,
       message,
-      claim.processingStartedAt,
+      claim.processingLeaseToken,
+      userMessage.row.correlationId ?? correlationId,
     );
-    await finishMessageProcessing(userMessage.row.id, claim.processingStartedAt, "completed");
-    return result;
   } catch (error) {
     await finishMessageProcessing(
       userMessage.row.id,
-      claim.processingStartedAt,
+      claim.processingLeaseToken,
       "failed",
     ).catch((finishError) => {
       console.error("Failed to release Telegram processing claim", finishError);
@@ -439,7 +384,8 @@ async function processTelegramMessage(
   context: RuntimeContext,
   userMessage: Awaited<ReturnType<typeof createMessage>>,
   message: TelegramTextMessage,
-  processingStartedAt: Date,
+  leaseToken: string,
+  correlationId: string,
 ) {
 
   await logRuntimeEvent({
@@ -450,11 +396,15 @@ async function processTelegramMessage(
     payloadJson: {
       messageId: userMessage.row.id,
       telegramMessageId: message.messageId,
+      correlationId,
       resumed: !userMessage.created,
     },
   });
   const config = runtimeConfig(context);
   const analyzed = await analyzeMessage(message.text, config.model);
+  if (!await renewMessageProcessing(userMessage.row.id, leaseToken)) {
+    throw new Error("Telegram processing lease expired during analysis");
+  }
   await createAnnotation({
     messageId: userMessage.row.id,
     topicsJson: analyzed.analysis.topics,
@@ -481,7 +431,8 @@ async function processTelegramMessage(
       message,
       analyzed.analysis,
       userMessage.row.id,
-      processingStartedAt,
+      leaseToken,
+      correlationId,
     );
   }
 
@@ -575,74 +526,63 @@ async function processTelegramMessage(
     ],
     analysis: analyzed.analysis,
     userMessage: message.text,
-    recentMessages: recentMessages.map((item) => ({ role: item.role, text: item.text })),
+    recentMessages: recentMessages
+      .filter((item) => item.id !== userMessage.row.id)
+      .map((item) => ({ role: item.role, text: item.text })),
   });
-  if (!await hasMessageProcessingClaim(userMessage.row.id, processingStartedAt)) {
-    throw new Error("Telegram processing lease was replaced before send");
+  if (!await renewMessageProcessing(userMessage.row.id, leaseToken)) {
+    throw new Error("Telegram processing lease expired during actor generation");
   }
-  const telegram = await sendTelegramMessage(message.chatId, acted.finalText);
-  const assistant = await createMessage({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    role: "assistant",
-    text: acted.finalText,
-    rawJson: {
-      actionPlan: plan,
-      actorRaw: acted.actorRaw,
-      selectedMemories: selectedMemories.map((memory) => memory.id),
-      selectedSeed,
-      topicEntropy,
-      mirrorIndex,
-      repetitionScore,
-      replyToTelegramMessageId: message.messageId,
-      telegram: telegram.raw,
-    },
-    telegramMessageId: telegram.messageId,
-    chatId: message.chatId,
-    memoryCandidateJson: acted.actorOutput.memoryCandidate,
-  });
-  await annotateAssistant(assistant.row.id, {
-    text: acted.finalText,
-    plan,
-    analysis: analyzed.analysis,
-    selectedSeed,
-  });
-  await persistToolExecution(context, assistant.row.id, acted.toolExecution, plan.reason);
-  if (selectedSeed?.id) await markSeedUsed(selectedSeed.id);
-  if (shouldStoreMemory(acted.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
-    const memory = await createMemory({
+  const memoryCandidate = shouldStoreMemory(
+    acted.actorOutput.memoryCandidate,
+    config.policy.memoryWriteThreshold,
+  )
+    ? acted.actorOutput.memoryCandidate
+    : null;
+  const assistant = await enqueueWithStateRetry(
+    context.companion.id,
+    {
       userId: context.user.id,
       companionId: context.companion.id,
-      ...acted.actorOutput.memoryCandidate,
-      tagsJson: acted.actorOutput.memoryCandidate.tags,
-      confidence: 0.72,
-    });
-    await logRuntimeEvent({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      type: "memory.write",
-      source: "actor",
-      payloadJson: {
-        memoryId: memory.id,
-        reason: `candidate importance met threshold ${config.policy.memoryWriteThreshold}`,
-        candidate: acted.actorOutput.memoryCandidate,
+      chatId: message.chatId,
+      text: acted.finalText,
+      rawJson: {
+        actionPlan: plan,
+        actorRaw: acted.actorRaw,
+        selectedMemories: selectedMemories.map((memory) => memory.id),
+        selectedSeed,
+        topicEntropy,
+        mirrorIndex,
+        repetitionScore,
+        replyToTelegramMessageId: message.messageId,
       },
-    });
-  }
-  const growth = applyInteractionGrowth(context.state, analyzed.analysis);
-  await persistState(context, growth.changes);
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "assistant.message",
-    source: "telegram",
-    payloadJson: {
-      messageId: assistant.row.id,
-      replyToTelegramMessageId: message.messageId,
-      actionPlan: plan,
+      correlationId,
+      sourceType: "telegram_reply",
+      sourceId: userMessage.row.id,
+      idempotencyBase: `reply:${userMessage.row.id}`,
+      replyToMessageId: userMessage.row.id,
+      processing: { messageId: userMessage.row.id, leaseToken },
+      annotation: buildAssistantAnnotation({
+        text: acted.finalText,
+        plan,
+        analysis: analyzed.analysis,
+        selectedSeed,
+      }),
+      memoryCandidate,
+      toolCall: toolCallWrite(acted.toolExecution, plan.reason),
+      selectedSeedId: selectedSeed?.id,
     },
-  });
-  return { status: "processed" as const, safetyMode: false, messageId: assistant.row.id };
+    (state) => applyInteractionGrowth(state, analyzed.analysis),
+  );
+  if (!assistant.message) throw new Error("Failed to enqueue assistant reply");
+  if (!assistant.created) await completeMessageProcessing(userMessage.row.id);
+  const delivery = await drainTelegramOutbox(assistant.message.id);
+  return {
+    status: "processed" as const,
+    safetyMode: false,
+    messageId: assistant.message.id,
+    delivery,
+  };
 }
 
 async function primaryContext(): Promise<RuntimeContext> {
@@ -666,6 +606,7 @@ async function writeProactiveLog(
     quietHoursBlocked?: boolean;
     dailyLimitBlocked?: boolean;
     intervalBlocked?: boolean;
+    idempotencyKey?: string | null;
     score: number;
   },
 ) {
@@ -707,6 +648,18 @@ async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
   const context = await primaryContext();
   const config = runtimeConfig(context);
   const timeZone = config.policy.quietHours.timeZone;
+  const windowStart = new Date(now);
+  windowStart.setUTCMinutes(0, 0, 0);
+  const idempotencyKey = `hourly:${context.companion.id}:${windowStart.toISOString()}`;
+  const existingCheck = await findProactiveLogByIdempotencyKey(idempotencyKey);
+  if (existingCheck && (!existingCheck.shouldSend || existingCheck.sentMessageId)) {
+    return {
+      sent: Boolean(existingCheck.sentMessageId),
+      reason: "already_checked",
+      score: existingCheck.score ?? undefined,
+      messageId: existingCheck.sentMessageId ?? undefined,
+    };
+  }
   const [
     stats,
     recentMessages,
@@ -730,7 +683,12 @@ async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
     userTopicNames(recentAnnotations),
     proactiveTags(recentMessages),
   );
-  const score = computeProactiveScore(context.state, Math.random(), topicEntropy, mirrorIndex);
+  const scoreRoll = deterministicRoll(idempotencyKey, "score");
+  const intervalRoll = deterministicRoll(idempotencyKey, "interval");
+  const thresholdRoll = deterministicRoll(idempotencyKey, "threshold");
+  const seedRoll = deterministicRoll(idempotencyKey, "seed-use");
+  const seedSelectionRoll = deterministicRoll(idempotencyKey, "seed-selection");
+  const score = computeProactiveScore(context.state, scoreRoll, topicEntropy, mirrorIndex);
   await logRuntimeEvent({
     userId: context.user.id,
     companionId: context.companion.id,
@@ -739,6 +697,8 @@ async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
     payloadJson: {
       at: now.toISOString(),
       score,
+      randomSeed: idempotencyKey,
+      rolls: { scoreRoll, intervalRoll, thresholdRoll, seedRoll, seedSelectionRoll },
       topicEntropy,
       mirrorIndex,
       noveltyBoost: (topicEntropy.collapseRisk ? 0.045 : 0) + (mirrorIndex > 0.8 ? 0.045 : 0),
@@ -750,33 +710,41 @@ async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
       shouldSend: false,
       reason: "Quiet hours: knowing when not to act is part of the policy",
       quietHoursBlocked: true,
+      idempotencyKey,
       score,
     });
     return { sent: false, reason: "quiet_hours", score };
   }
-  if (stats.sentToday >= config.policy.proactiveMaxPerDay) {
+  const reservedByThisWindow = existingCheck?.shouldSend ? 1 : 0;
+  if (stats.sentToday - reservedByThisWindow >= config.policy.proactiveMaxPerDay) {
     await writeProactiveLog(context, {
       shouldSend: false,
       reason: "Daily proactive limit reached",
       dailyLimitBlocked: true,
+      idempotencyKey,
       score,
     });
     return { sent: false, reason: "daily_limit", score };
   }
-  if (hoursSince(stats.lastSentAt, now) < config.policy.minimumProactiveIntervalHours + Math.random() * 2) {
+  if (
+    !existingCheck &&
+    hoursSince(stats.lastSentAt, now) < config.policy.minimumProactiveIntervalHours + intervalRoll * 2
+  ) {
     await writeProactiveLog(context, {
       shouldSend: false,
       reason: "Minimum proactive interval has not elapsed",
       intervalBlocked: true,
+      idempotencyKey,
       score,
     });
     return { sent: false, reason: "minimum_interval", score };
   }
-  const scoreThreshold = 0.5 + Math.random() * 0.14;
+  const scoreThreshold = 0.5 + thresholdRoll * 0.14;
   if (score < scoreThreshold) {
     await writeProactiveLog(context, {
       shouldSend: false,
       reason: "Drive, relationship and random jitter did not justify an interruption",
+      idempotencyKey,
       score,
     });
     return { sent: false, reason: "score_below_threshold", score, scoreThreshold };
@@ -794,11 +762,15 @@ async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
     analysis,
     mirrorIndex,
     required: true,
+    random: seedRoll,
+    selectionRandom: seedSelectionRoll,
+    now,
   });
   if (!selectedSeed) {
     await writeProactiveLog(context, {
       shouldSend: false,
       reason: "No enabled novelty seed is available",
+      idempotencyKey,
       score,
     });
     return { sent: false, reason: "no_seed", score };
@@ -848,6 +820,7 @@ async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
       reason: plan.reason,
       selectedMode: plan.mode,
       selectedSeedJson: selectedSeed,
+      idempotencyKey,
       score,
     });
     return { sent: false, reason: "ego_do_nothing", score };
@@ -872,91 +845,88 @@ async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
   });
 
   const chatId = recentMessages.find((message) => message.role === "user" && message.chatId)?.chatId ?? context.user.telegramUserId;
-  // Reserve budget before the external send. If persistence fails after
-  // Telegram accepts the message, the reservation still prevents another send.
-  const reservation = await writeProactiveLog(context, {
+  // The database reservation is the cross-process lock for this hourly window.
+  const reservation = existingCheck ?? await writeProactiveLog(context, {
     shouldSend: true,
-    reason: `Reserved before send: ${plan.reason}`,
+    reason: `Reserved before enqueue: ${plan.reason}`,
     selectedMode: plan.mode,
     selectedSeedJson: selectedSeed,
+    idempotencyKey,
     score,
   });
-  let telegramSent = false;
   try {
-    const telegram = await sendTelegramMessage(chatId, acted.finalText);
-    telegramSent = true;
-    const assistant = await createMessage({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      role: "assistant",
-      text: acted.finalText,
-      rawJson: {
-        proactive: true,
-        actionPlan: plan,
-        actorRaw: acted.actorRaw,
-        selectedSeed,
-        selectedMemories: selectedMemories.map((memory) => memory.id),
-        score,
-        topicEntropy,
-        mirrorIndex,
-        telegram: telegram.raw,
+    const memoryCandidate = shouldStoreMemory(
+      acted.actorOutput.memoryCandidate,
+      config.policy.memoryWriteThreshold,
+    )
+      ? acted.actorOutput.memoryCandidate
+      : null;
+    const assistant = await enqueueWithStateRetry(
+      context.companion.id,
+      {
+        userId: context.user.id,
+        companionId: context.companion.id,
+        chatId,
+        text: acted.finalText,
+        rawJson: {
+          proactive: true,
+          actionPlan: plan,
+          actorRaw: acted.actorRaw,
+          selectedSeed,
+          selectedMemories: selectedMemories.map((memory) => memory.id),
+          score,
+          topicEntropy,
+          mirrorIndex,
+          randomSeed: idempotencyKey,
+        },
+        correlationId: reservation.id,
+        sourceType: "proactive",
+        sourceId: reservation.id,
+        idempotencyBase: `proactive:${reservation.id}`,
+        annotation: buildAssistantAnnotation({
+          text: acted.finalText,
+          plan,
+          analysis,
+          selectedSeed,
+          proactive: true,
+        }),
+        memoryCandidate,
+        toolCall: toolCallWrite(acted.toolExecution, plan.reason),
+        selectedSeedId: selectedSeed.id,
+        proactiveLogId: reservation.id,
       },
-      telegramMessageId: telegram.messageId,
-      chatId,
-      memoryCandidateJson: acted.actorOutput.memoryCandidate,
-    });
-    await annotateAssistant(assistant.row.id, {
-      text: acted.finalText,
-      plan,
-      analysis,
-      selectedSeed,
-      proactive: true,
-    });
-    await persistToolExecution(context, assistant.row.id, acted.toolExecution, plan.reason);
-    if (selectedSeed.id) await markSeedUsed(selectedSeed.id);
-    if (shouldStoreMemory(acted.actorOutput.memoryCandidate, config.policy.memoryWriteThreshold)) {
-      const memory = await createMemory({
-        userId: context.user.id,
-        companionId: context.companion.id,
-        ...acted.actorOutput.memoryCandidate,
-        tagsJson: acted.actorOutput.memoryCandidate.tags,
-        confidence: 0.72,
-      });
-      await logRuntimeEvent({
-        userId: context.user.id,
-        companionId: context.companion.id,
-        type: "memory.write",
-        source: "actor.proactive",
-        payloadJson: { memoryId: memory.id, candidate: acted.actorOutput.memoryCandidate },
-      });
-    }
-    await updateProactiveLog(reservation.id, {
-      reason: plan.reason,
-      sentMessageId: assistant.row.id,
-      sentText: acted.finalText,
-    });
+      applyProactiveGrowth,
+    );
+    if (!assistant.message) throw new Error("Failed to enqueue proactive message");
+    await updateProactiveLog(reservation.id, { reason: plan.reason });
+    const delivery = await drainTelegramOutbox(assistant.message.id);
+    const outbox = await listMessageOutbox(assistant.message.id);
+    const delivered = outbox.length > 0 && outbox.every((item) => item.status === "delivered");
     await logRuntimeEvent({
       userId: context.user.id,
       companionId: context.companion.id,
-      type: "proactive.sent",
+      type: delivered ? "proactive.sent" : "proactive.queued",
       source: "cron.hourly",
-      payloadJson: { messageId: assistant.row.id, score, actionPlan: plan, selectedSeed },
+      payloadJson: {
+        correlationId: reservation.id,
+        messageId: assistant.message.id,
+        score,
+        actionPlan: plan,
+        selectedSeed,
+        delivery,
+      },
     });
-    await logRuntimeEvent({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      type: "assistant.message",
-      source: "telegram.proactive",
-      payloadJson: { messageId: assistant.row.id, actionPlan: plan },
-    });
-    const growth = applyProactiveGrowth(context.state);
-    await persistState(context, growth.changes);
-    return { sent: true, reason: plan.reason, score, messageId: assistant.row.id };
+    return {
+      sent: delivered,
+      reason: plan.reason,
+      score,
+      messageId: assistant.message.id,
+    };
   } catch (error) {
-    await updateProactiveLog(reservation.id, telegramSent
-      ? { reason: `Telegram sent; persistence incomplete: ${plan.reason}` }
-      : { shouldSend: false, reason: `Send failed: ${plan.reason}` }
-    ).catch((updateError) => {
+    await updateProactiveLog(reservation.id, {
+      shouldSend: false,
+      reason: `Enqueue failed: ${plan.reason}`,
+    }).catch((updateError) => {
       console.error("Failed to update proactive reservation", updateError);
     });
     throw error;

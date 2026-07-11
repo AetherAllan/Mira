@@ -20,6 +20,10 @@ test("telegram bubbles split on real and literal newlines", () => {
   assert.deepEqual(splitTelegramBubbles("单条"), ["单条"]);
   assert.deepEqual(splitTelegramBubbles("a\n\n\nb"), ["a", "b"]);
   assert.deepEqual(splitTelegramBubbles("1\n2\n3\n4"), ["1", "2", "3", "4"]);
+  assert.equal(splitTelegramBubbles("x".repeat(4097))[0]?.length, 4096);
+  assert.equal(splitTelegramBubbles("x".repeat(4097))[1], "x");
+  assert.deepEqual(splitTelegramBubbles("1\n2\n3", 2), ["1\n2\n3"]);
+  assert.throws(() => splitTelegramBubbles("x".repeat(8193), 2), /exceeds 2 bubbles/);
 });
 
 test("echo detector catches repeated assistant replies", () => {

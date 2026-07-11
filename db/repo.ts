@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   and,
   count,
@@ -306,34 +307,25 @@ export async function createMessage(input: NewMessage) {
   return { row: existing, created: false };
 }
 
-export async function findAssistantReply(
-  companionId: string,
-  chatId: string,
-  telegramMessageId: number,
-) {
+export async function findAssistantReply(replyToMessageId: string) {
   const rows = await getDb()
     .select()
     .from(messages)
-    .where(
-      and(
-        eq(messages.companionId, companionId),
-        eq(messages.role, "assistant"),
-        eq(messages.chatId, chatId),
-        sql`${messages.rawJson}->>'replyToTelegramMessageId' = ${String(telegramMessageId)}`,
-      ),
-    )
+    .where(eq(messages.replyToMessageId, replyToMessageId))
     .limit(1);
   return rows[0] ?? null;
 }
 
-export async function claimMessageProcessing(messageId: string) {
-  const staleBefore = new Date(Date.now() - 3 * 60_000);
-  const processingStartedAt = new Date();
+export async function claimMessageProcessing(messageId: string, now = new Date()) {
+  const leaseToken = randomUUID();
+  const processingLeaseExpiresAt = new Date(now.getTime() + 10 * 60_000);
   const rows = await getDb()
     .update(messages)
     .set({
       processingStatus: "processing",
-      processingStartedAt,
+      processingStartedAt: now,
+      processingLeaseToken: leaseToken,
+      processingLeaseExpiresAt,
       processingCompletedAt: null,
     })
     .where(
@@ -346,10 +338,7 @@ export async function claimMessageProcessing(messageId: string) {
           eq(messages.processingStatus, "failed"),
           and(
             eq(messages.processingStatus, "processing"),
-            or(
-              isNull(messages.processingStartedAt),
-              lt(messages.processingStartedAt, staleBefore),
-            ),
+            or(isNull(messages.processingLeaseExpiresAt), lt(messages.processingLeaseExpiresAt, now)),
           ),
         ),
       ),
@@ -360,7 +349,7 @@ export async function claimMessageProcessing(messageId: string) {
 
 export async function finishMessageProcessing(
   messageId: string,
-  processingStartedAt: Date,
+  leaseToken: string,
   status: "completed" | "failed",
 ) {
   const rows = await getDb()
@@ -368,11 +357,12 @@ export async function finishMessageProcessing(
     .set({
       processingStatus: status,
       processingCompletedAt: new Date(),
+      processingLeaseExpiresAt: null,
     })
     .where(
       and(
         eq(messages.id, messageId),
-        eq(messages.processingStartedAt, processingStartedAt),
+        eq(messages.processingLeaseToken, leaseToken),
       ),
     )
     .returning();
@@ -385,6 +375,7 @@ export async function completeMessageProcessing(messageId: string) {
     .set({
       processingStatus: "completed",
       processingCompletedAt: new Date(),
+      processingLeaseExpiresAt: null,
     })
     .where(eq(messages.id, messageId))
     .returning();
@@ -393,7 +384,7 @@ export async function completeMessageProcessing(messageId: string) {
 
 export async function hasMessageProcessingClaim(
   messageId: string,
-  processingStartedAt: Date,
+  leaseToken: string,
 ) {
   const rows = await getDb()
     .select({ id: messages.id })
@@ -402,11 +393,38 @@ export async function hasMessageProcessingClaim(
       and(
         eq(messages.id, messageId),
         eq(messages.processingStatus, "processing"),
-        eq(messages.processingStartedAt, processingStartedAt),
+        eq(messages.processingLeaseToken, leaseToken),
+        or(
+          isNull(messages.processingLeaseExpiresAt),
+          gte(messages.processingLeaseExpiresAt, new Date()),
+        ),
       ),
     )
     .limit(1);
   return Boolean(rows[0]);
+}
+
+export async function renewMessageProcessing(
+  messageId: string,
+  leaseToken: string,
+  now = new Date(),
+) {
+  const rows = await getDb()
+    .update(messages)
+    .set({ processingLeaseExpiresAt: new Date(now.getTime() + 10 * 60_000) })
+    .where(
+      and(
+        eq(messages.id, messageId),
+        eq(messages.processingStatus, "processing"),
+        eq(messages.processingLeaseToken, leaseToken),
+        or(
+          isNull(messages.processingLeaseExpiresAt),
+          gte(messages.processingLeaseExpiresAt, now),
+        ),
+      ),
+    )
+    .returning();
+  return rows[0] ?? null;
 }
 
 export async function createAnnotation(input: NewAnnotation) {
@@ -739,8 +757,29 @@ export async function getProactiveStats(companionId: string, timeZone = "Asia/To
 }
 
 export async function createProactiveLog(input: NewProactiveLog) {
-  const rows = await getDb().insert(proactiveLogs).values(input).returning();
-  return rows[0];
+  const rows = await getDb()
+    .insert(proactiveLogs)
+    .values(input)
+    .onConflictDoNothing({ target: proactiveLogs.idempotencyKey })
+    .returning();
+  if (rows[0]) return rows[0];
+  if (!input.idempotencyKey) throw new Error("Proactive log insert conflicted without idempotency key");
+  const existing = await getDb()
+    .select()
+    .from(proactiveLogs)
+    .where(eq(proactiveLogs.idempotencyKey, input.idempotencyKey))
+    .limit(1);
+  if (!existing[0]) throw new Error("Proactive log conflicted but no row was found");
+  return existing[0];
+}
+
+export async function findProactiveLogByIdempotencyKey(idempotencyKey: string) {
+  const rows = await getDb()
+    .select()
+    .from(proactiveLogs)
+    .where(eq(proactiveLogs.idempotencyKey, idempotencyKey))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function updateProactiveLog(

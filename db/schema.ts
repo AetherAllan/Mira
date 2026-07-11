@@ -88,11 +88,20 @@ export const messages = pgTable(
     rawJson: jsonb("raw_json"),
     telegramMessageId: integer("telegram_message_id"),
     chatId: text("chat_id"),
+    replyToMessageId: uuid("reply_to_message_id"),
+    correlationId: uuid("correlation_id"),
+    sourceType: text("source_type"),
+    sourceId: text("source_id"),
+    deliveryStatus: text("delivery_status", {
+      enum: ["pending", "sending", "delivered", "failed", "delivery_unknown"],
+    }),
     memoryCandidateJson: jsonb("memory_candidate_json"),
     processingStatus: text("processing_status", {
       enum: ["received", "processing", "completed", "failed"],
     }),
     processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
+    processingLeaseToken: uuid("processing_lease_token"),
+    processingLeaseExpiresAt: timestamp("processing_lease_expires_at", { withTimezone: true }),
     processingCompletedAt: timestamp("processing_completed_at", { withTimezone: true }),
     createdAt: createdAt(),
   },
@@ -103,6 +112,45 @@ export const messages = pgTable(
       table.role,
       table.telegramMessageId,
     ),
+    uniqueIndex("messages_reply_to_message_idx").on(table.replyToMessageId),
+  ],
+);
+
+export const messageOutbox = pgTable(
+  "message_outbox",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    chatId: text("chat_id").notNull(),
+    bubbleIndex: integer("bubble_index").notNull(),
+    body: text("body").notNull(),
+    status: text("status", {
+      enum: ["pending", "sending", "delivered", "failed", "delivery_unknown"],
+    })
+      .notNull()
+      .default("pending"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    telegramMessageId: integer("telegram_message_id"),
+    lastError: text("last_error"),
+    lastResponseJson: jsonb("last_response_json"),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("message_outbox_idempotency_idx").on(table.idempotencyKey),
+    uniqueIndex("message_outbox_message_bubble_idx").on(table.messageId, table.bubbleIndex),
+    index("message_outbox_status_available_idx").on(table.status, table.availableAt),
+    index("message_outbox_message_idx").on(table.messageId, table.bubbleIndex),
   ],
 );
 
@@ -235,9 +283,13 @@ export const proactiveLogs = pgTable(
     dailyLimitBlocked: boolean("daily_limit_blocked").notNull().default(false),
     intervalBlocked: boolean("interval_blocked").notNull().default(false),
     score: real("score"),
+    idempotencyKey: text("idempotency_key"),
     createdAt: createdAt(),
   },
-  (table) => [index("proactive_logs_companion_created_idx").on(table.companionId, table.createdAt)],
+  (table) => [
+    index("proactive_logs_companion_created_idx").on(table.companionId, table.createdAt),
+    uniqueIndex("proactive_logs_idempotency_idx").on(table.idempotencyKey),
+  ],
 );
 
 export const stateChanges = pgTable(

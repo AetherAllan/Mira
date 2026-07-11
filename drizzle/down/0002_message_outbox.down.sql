@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS "proactive_logs_idempotency_idx";
+DROP INDEX IF EXISTS "messages_reply_to_message_idx";
+DROP TABLE IF EXISTS "message_outbox";
+ALTER TABLE "proactive_logs" DROP COLUMN IF EXISTS "idempotency_key";
+ALTER TABLE "messages" DROP COLUMN IF EXISTS "processing_lease_expires_at";
+ALTER TABLE "messages" DROP COLUMN IF EXISTS "processing_lease_token";
+ALTER TABLE "messages" DROP COLUMN IF EXISTS "delivery_status";
+ALTER TABLE "messages" DROP COLUMN IF EXISTS "source_id";
+ALTER TABLE "messages" DROP COLUMN IF EXISTS "source_type";
+ALTER TABLE "messages" DROP COLUMN IF EXISTS "correlation_id";
+ALTER TABLE "messages" DROP COLUMN IF EXISTS "reply_to_message_id";

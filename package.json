@@ -20,7 +20,8 @@
     "seed": "bun scripts/seed.ts",
     "telegram:set-webhook": "bun scripts/set-telegram-webhook.ts",
     "cron:hourly": "bun scripts/run-cron.ts hourly",
-    "cron:daily": "bun scripts/run-cron.ts daily"
+    "cron:daily": "bun scripts/run-cron.ts daily",
+    "cron:outbox": "bun scripts/run-cron.ts outbox"
   },
   "dependencies": {
     "@radix-ui/react-slot": "1.3.0",

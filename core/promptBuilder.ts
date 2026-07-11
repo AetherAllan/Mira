@@ -23,15 +23,11 @@ export function buildActorPrompt(input: ActorPromptInput): string {
   const { character } = input.config;
   const photoMode =
     input.plan.mode === "photo_share" || input.plan.mode === "inner_world_scene";
-  // Redact prior assistant text so the model cannot copy-paste it.
+  // Repository queries newest-first; prompts need normal conversation order.
+  // The caller excludes the current inbound message so it appears only once.
   const recent = [...(input.recentMessages ?? [])]
-    .slice(0, 8)
-    .reverse()
-    .map((item) =>
-      item.role === "assistant"
-        ? { role: item.role, text: "[already sent]" }
-        : { role: item.role, text: item.text },
-    );
+    .slice(0, 20)
+    .reverse();
   return [
     "Who you are:",
     character.identity.join("\n"),
@@ -53,7 +49,7 @@ export function buildActorPrompt(input: ActorPromptInput): string {
     `Avoid: ${JSON.stringify(character.forbiddenStyles)}`,
     `Hard limits: ${JSON.stringify(character.boundaries)}`,
     `Message analysis: ${JSON.stringify(input.analysis ?? null)}`,
-    `Recent conversation (oldest→newest, prior replies redacted): ${JSON.stringify(recent)}`,
+    `Recent conversation (oldest→newest, excluding the current message): ${JSON.stringify(recent)}`,
     `Latest user message (answer THIS, with new words only): ${JSON.stringify(input.userMessage ?? null)}`,
   ]
     .filter(Boolean)
