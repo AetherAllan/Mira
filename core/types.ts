@@ -143,6 +143,24 @@ export interface CharacterConfig {
   styleRules: string[];
   forbiddenStyles: string[];
   boundaries: string[];
+  profile: CharacterProfile;
+}
+
+export interface CharacterProfile {
+  city: string;
+  timeZone: string;
+  education: string;
+  lifeStage: string;
+  housing: string;
+  company: string;
+  jobTitle: string;
+  workHours: { start: string; end: string; flexible: boolean };
+  workPressure: string;
+  incomeLevel: string;
+  commuteModes: string[];
+  interests: string[];
+  homePlaceKey: string;
+  workPlaceKey: string;
 }
 
 export interface PolicyConfig {
@@ -154,6 +172,7 @@ export interface PolicyConfig {
 }
 
 export interface RuntimeConfig {
+  schemaVersion: 2;
   character: CharacterConfig;
   policy: PolicyConfig;
   model: string;

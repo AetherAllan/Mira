@@ -17,6 +17,7 @@ export function SettingsForm({ config }: { config: RuntimeConfig }) {
   async function save(formData: FormData) {
     setBusy(true); setStatus(null);
     const payload: RuntimeConfig = {
+      schemaVersion: 2,
       model: String(formData.get("model")),
       character: {
         name: String(formData.get("name")),
@@ -25,6 +26,9 @@ export function SettingsForm({ config }: { config: RuntimeConfig }) {
         styleRules: list(formData.get("styleRules")),
         forbiddenStyles: list(formData.get("forbiddenStyles")),
         boundaries: list(formData.get("boundaries")),
+        // Profile editing is added with the world settings UI. Preserve the
+        // current value so this form cannot erase server-managed world identity.
+        profile: config.character.profile,
       },
       policy: {
         proactiveMaxPerDay: Number(formData.get("proactiveMaxPerDay")),
@@ -51,4 +55,3 @@ export function SettingsForm({ config }: { config: RuntimeConfig }) {
     </form>
   );
 }
-

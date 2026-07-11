@@ -196,6 +196,7 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
             companionId: input.companionId,
             type: "memory.write",
             source: input.sourceType,
+            correlationId: input.correlationId,
             payloadJson: {
               correlationId: input.correlationId,
               memoryId: memory.id,
@@ -219,6 +220,7 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
           companionId: input.companionId,
           type: "tool.call",
           source: input.sourceType,
+          correlationId: input.correlationId,
           payloadJson: {
             correlationId: input.correlationId,
             messageId: message.id,
@@ -245,6 +247,7 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
             deltaJson: change.deltaJson,
             reason: change.reason,
             causedBy: change.causedBy,
+            correlationId: input.correlationId,
           })),
         );
         await tx.insert(events).values(
@@ -253,6 +256,7 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
             companionId: input.companionId,
             type: "state.change",
             source: change.causedBy,
+            correlationId: input.correlationId,
             payloadJson: { correlationId: input.correlationId, ...change },
           })),
         );
@@ -263,6 +267,7 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
         companionId: input.companionId,
         type: "assistant.message",
         source: input.sourceType,
+        correlationId: input.correlationId,
         payloadJson: {
           correlationId: input.correlationId,
           messageId: message.id,
@@ -273,7 +278,13 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
       if (input.proactiveLogId) {
         await tx
           .update(proactiveLogs)
-          .set({ sentMessageId: message.id, sentText: input.text })
+          .set({
+            sentMessageId: message.id,
+            sentText: input.text,
+            correlationId: input.correlationId,
+            sourceType: input.sourceType,
+            sourceId: input.sourceId,
+          })
           .where(eq(proactiveLogs.id, input.proactiveLogId));
       }
 

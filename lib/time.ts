@@ -11,7 +11,7 @@ export function isValidTimeZone(value: string) {
   }
 }
 
-export function zonedDateKey(date = new Date(), timeZone = "Asia/Tokyo") {
+export function zonedDateKey(date = new Date(), timeZone = "Asia/Shanghai") {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
@@ -20,7 +20,7 @@ export function zonedDateKey(date = new Date(), timeZone = "Asia/Tokyo") {
   }).format(date);
 }
 
-export function zonedMinutes(date = new Date(), timeZone = "Asia/Tokyo") {
+export function zonedMinutes(date = new Date(), timeZone = "Asia/Shanghai") {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     hour: "2-digit",
@@ -57,6 +57,6 @@ export function formatTimestamp(value: Date | string | null | undefined) {
   return new Intl.DateTimeFormat("zh-CN", {
     dateStyle: "short",
     timeStyle: "medium",
-    timeZone: "Asia/Tokyo",
+    timeZone: "Asia/Shanghai",
   }).format(new Date(value));
 }

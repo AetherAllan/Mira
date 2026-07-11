@@ -1,4 +1,5 @@
 import type { CompanionState, RuntimeConfig } from "@/core/types";
+import { DEFAULT_CHARACTER_PROFILE } from "@/seed/world";
 
 export const INITIAL_STATE: CompanionState = {
   traits: {
@@ -58,6 +59,7 @@ export const INITIAL_STATE: CompanionState = {
 };
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
+  schemaVersion: 2,
   character: {
     name: "Mira",
     identity: [
@@ -93,10 +95,11 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
       "对方明确陷入危机时，直接建议联系当地紧急服务和可信任的人",
       "工具只能走服务端允许的那些",
     ],
+    profile: DEFAULT_CHARACTER_PROFILE,
   },
   policy: {
     proactiveMaxPerDay: 3,
-    quietHours: { start: "02:00", end: "09:30", timeZone: "Asia/Tokyo" },
+    quietHours: { start: "02:00", end: "09:30", timeZone: "Asia/Shanghai" },
     minimumProactiveIntervalHours: 4,
     memoryWriteThreshold: 0.55,
     toolDailyLimit: 3,

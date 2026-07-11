@@ -5,6 +5,7 @@ export interface RuntimeEventInput {
   companionId: string;
   type: string;
   source: string;
+  correlationId?: string | null;
   payloadJson?: unknown;
 }
 

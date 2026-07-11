@@ -451,7 +451,7 @@ export const DEMO_DASHBOARD_DATA: DashboardData = {
     {
       id: "pl-3",
       shouldSend: false,
-      reason: "quiet hours: 02:00–09:30 Asia/Tokyo",
+      reason: "quiet hours: 02:00–09:30 Asia/Shanghai",
       selectedMode: "quiet_observation",
       selectedSeedJson: null,
       sentMessageId: null,

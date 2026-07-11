@@ -27,6 +27,7 @@ import {
   computeTopicEntropy,
 } from "@/core/metrics";
 import { getDb } from "@/db/client";
+import { ensurePersistentWorld } from "@/db/worldRepo";
 import {
   companions,
   companionStates,
@@ -145,7 +146,7 @@ function zonedMidnight(year: number, month: number, day: number, timeZone: strin
   return new Date(candidate);
 }
 
-function dayBounds(date?: string, timeZone = "Asia/Tokyo") {
+function dayBounds(date?: string, timeZone = "Asia/Shanghai") {
   let year: number;
   let month: number;
   let day: number;
@@ -239,7 +240,13 @@ export async function ensureCompanionContext(
     })
     .onConflictDoNothing({ target: companionStates.companionId });
 
-  await createEventSeeds(companion.id, DEFAULT_SEED_CARDS);
+  const world = await Promise.all([
+    createEventSeeds(companion.id, DEFAULT_SEED_CARDS),
+    ensurePersistentWorld(
+      companion.id,
+      companion.configJson.character.profile ?? DEFAULT_RUNTIME_CONFIG.character.profile,
+    ),
+  ]).then(([, persistentWorld]) => persistentWorld);
 
   const [stateRow, seeds] = await Promise.all([
     db
@@ -252,7 +259,7 @@ export async function ensureCompanionContext(
   ]);
 
   if (!stateRow) throw new Error("Failed to create companion state");
-  return { user, companion, state: stateFromRow(stateRow), stateRow, seeds };
+  return { user, companion, state: stateFromRow(stateRow), stateRow, seeds, world };
 }
 
 export const bootstrapCompanion = ensureCompanionContext;
@@ -506,7 +513,7 @@ export async function listAvailableMemories(companionId: string, limit = 12) {
     .limit(clampLimit(limit, 12));
 }
 
-export async function useMemories(ids: string[], timeZone = "Asia/Tokyo") {
+export async function useMemories(ids: string[], timeZone = "Asia/Shanghai") {
   if (ids.length === 0) return [];
 
   // A fourth use on the same UTC day starts a 24-hour cooldown. Keeping this in
@@ -676,7 +683,7 @@ export async function createToolCall(input: NewToolCall) {
   return rows[0];
 }
 
-export async function countTodayToolCalls(companionId: string, timeZone = "Asia/Tokyo") {
+export async function countTodayToolCalls(companionId: string, timeZone = "Asia/Shanghai") {
   const { start, end } = dayBounds(undefined, timeZone);
   const rows = await getDb()
     .select({ value: count() })
@@ -694,7 +701,7 @@ export async function countTodayToolCalls(companionId: string, timeZone = "Asia/
 export async function getToolStats(
   companionId: string,
   toolName: string,
-  timeZone = "Asia/Tokyo",
+  timeZone = "Asia/Shanghai",
 ) {
   const { start, end } = dayBounds(undefined, timeZone);
   const [todayRows, lastRows] = await Promise.all([
@@ -724,7 +731,7 @@ export async function getToolStats(
   };
 }
 
-export async function getProactiveStats(companionId: string, timeZone = "Asia/Tokyo") {
+export async function getProactiveStats(companionId: string, timeZone = "Asia/Shanghai") {
   const { start, end } = dayBounds(undefined, timeZone);
   const [todayRows, lastRows] = await Promise.all([
     getDb()
@@ -1050,7 +1057,7 @@ export async function generateWorldEventFromSeed(companionId: string, requestedS
 export async function listTodayActivity(
   companionId: string,
   date?: string,
-  timeZone = "Asia/Tokyo",
+  timeZone = "Asia/Shanghai",
 ) {
   const { start, end } = dayBounds(date, timeZone);
   const [messageRows, annotationRows, worldEventRows, proactiveRows] =
@@ -1280,6 +1287,10 @@ function finiteNumber(value: unknown, fallback: number, minimum: number, maximum
     : fallback;
 }
 
+function nonEmptyString(value: unknown, fallback: string) {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1295,6 +1306,7 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
   const current = currentRows[0].config;
   const patch = isRecord(patchValue) ? patchValue : {};
   const characterPatch = isRecord(patch.character) ? patch.character : {};
+  const profilePatch = isRecord(characterPatch.profile) ? characterPatch.profile : {};
   const policyPatch = isRecord(patch.policy) ? patch.policy : {};
   const quietPatch = isRecord(policyPatch.quietHours) ? policyPatch.quietHours : {};
   const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -1305,7 +1317,18 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
     throw new Error("Invalid time zone");
   }
 
+  // Old rows are migrated in SQL, but the fallback keeps the admin endpoint
+  // safe during rolling deploys where application and migration overlap.
+  const currentProfile = current.character.profile ?? DEFAULT_RUNTIME_CONFIG.character.profile;
+  const workHoursPatch = isRecord(profilePatch.workHours) ? profilePatch.workHours : {};
+  const requestedProfileTimeZone =
+    typeof profilePatch.timeZone === "string" ? profilePatch.timeZone.trim() : "";
+  if (requestedProfileTimeZone && !isValidTimeZone(requestedProfileTimeZone)) {
+    throw new Error("Invalid profile time zone");
+  }
+
   const next: RuntimeConfig = {
+    schemaVersion: 2,
     character: {
       name:
         typeof characterPatch.name === "string" && characterPatch.name.trim()
@@ -1319,6 +1342,35 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
         current.character.forbiddenStyles,
       ),
       boundaries: stringList(characterPatch.boundaries, current.character.boundaries),
+      profile: {
+        city: nonEmptyString(profilePatch.city, currentProfile.city),
+        timeZone: requestedProfileTimeZone || currentProfile.timeZone,
+        education: nonEmptyString(profilePatch.education, currentProfile.education),
+        lifeStage: nonEmptyString(profilePatch.lifeStage, currentProfile.lifeStage),
+        housing: nonEmptyString(profilePatch.housing, currentProfile.housing),
+        company: nonEmptyString(profilePatch.company, currentProfile.company),
+        jobTitle: nonEmptyString(profilePatch.jobTitle, currentProfile.jobTitle),
+        workHours: {
+          start:
+            typeof workHoursPatch.start === "string" && timePattern.test(workHoursPatch.start)
+              ? workHoursPatch.start
+              : currentProfile.workHours.start,
+          end:
+            typeof workHoursPatch.end === "string" && timePattern.test(workHoursPatch.end)
+              ? workHoursPatch.end
+              : currentProfile.workHours.end,
+          flexible:
+            typeof workHoursPatch.flexible === "boolean"
+              ? workHoursPatch.flexible
+              : currentProfile.workHours.flexible,
+        },
+        workPressure: nonEmptyString(profilePatch.workPressure, currentProfile.workPressure),
+        incomeLevel: nonEmptyString(profilePatch.incomeLevel, currentProfile.incomeLevel),
+        commuteModes: stringList(profilePatch.commuteModes, currentProfile.commuteModes),
+        interests: stringList(profilePatch.interests, currentProfile.interests),
+        homePlaceKey: nonEmptyString(profilePatch.homePlaceKey, currentProfile.homePlaceKey),
+        workPlaceKey: nonEmptyString(profilePatch.workPlaceKey, currentProfile.workPlaceKey),
+      },
     },
     policy: {
       proactiveMaxPerDay: finiteNumber(

@@ -33,12 +33,12 @@ test("mirror index is tag overlap, not prose similarity", () => {
 });
 
 test("quiet hours supports a same-day interval", () => {
-  const policy = { start: "02:00", end: "09:30", timeZone: "Asia/Tokyo" };
-  assert.equal(isQuietHours(new Date("2026-07-10T21:00:00Z"), policy), true); // 06:00 JST
-  assert.equal(isQuietHours(new Date("2026-07-10T03:00:00Z"), policy), false); // 12:00 JST
+  const policy = { start: "02:00", end: "09:30", timeZone: "Asia/Shanghai" };
+  assert.equal(isQuietHours(new Date("2026-07-10T22:00:00Z"), policy), true); // 06:00 CST
+  assert.equal(isQuietHours(new Date("2026-07-10T04:00:00Z"), policy), false); // 12:00 CST
 });
 
 test("timezone validation rejects values that would crash Intl", () => {
-  assert.equal(isValidTimeZone("Asia/Tokyo"), true);
-  assert.equal(isValidTimeZone("Asia/Tokyoo"), false);
+  assert.equal(isValidTimeZone("Asia/Shanghai"), true);
+  assert.equal(isValidTimeZone("Asia/Shanghaio"), false);
 });

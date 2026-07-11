@@ -288,6 +288,7 @@ async function persistSafetyReply(
     companionId: context.companion.id,
     type: "psyche.ego.plan",
     source: "safety",
+    correlationId,
     payloadJson: plan,
   });
   const assistant = await enqueueWithStateRetry(
@@ -393,6 +394,7 @@ async function processTelegramMessage(
     companionId: context.companion.id,
     type: "user.message",
     source: "telegram",
+    correlationId,
     payloadJson: {
       messageId: userMessage.row.id,
       telegramMessageId: message.messageId,
@@ -419,6 +421,7 @@ async function processTelegramMessage(
     companionId: context.companion.id,
     type: "psyche.analyzer",
     source: "analyzer",
+    correlationId,
     payloadJson: {
       analysis: analyzed.analysis,
       usedFallback: analyzed.usedFallback,
@@ -480,6 +483,7 @@ async function processTelegramMessage(
     companionId: context.companion.id,
     type: "psyche.id.drive",
     source: "id",
+    correlationId,
     payloadJson: driveAssessment,
   });
   const directed = await directAction({
@@ -508,6 +512,7 @@ async function processTelegramMessage(
     companionId: context.companion.id,
     type: "psyche.ego.plan",
     source: "ego",
+    correlationId,
     payloadJson: { ...plan, usedFallback: directed.usedFallback, error: directed.error },
   });
 
