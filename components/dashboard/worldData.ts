@@ -6,6 +6,7 @@ import {
   awaitingReplies,
   externalInformation,
   innerThoughts,
+  llmUsageLogs,
   openLoops,
   promptContextSnapshots,
   scheduleBlocks,
@@ -32,7 +33,7 @@ export async function loadWorldDashboardData() {
   const timeZone = context.companion.configJson.character.profile.timeZone;
   const localDate = zonedDateKey(new Date(), timeZone);
   const db = getDb();
-  const [schedule, events, loops, thoughts, candidates, awaiting, external, ticks, snapshots, changes] =
+  const [schedule, events, loops, thoughts, candidates, awaiting, external, ticks, snapshots, changes, usage] =
     await Promise.all([
       db.select().from(scheduleBlocks).where(eq(scheduleBlocks.companionId, companionId)).orderBy(asc(scheduleBlocks.startAt)).limit(40),
       db.select().from(worldEvents).where(eq(worldEvents.companionId, companionId)).orderBy(desc(worldEvents.occurredAt)).limit(100),
@@ -44,6 +45,7 @@ export async function loadWorldDashboardData() {
       db.select().from(worldTickRuns).where(eq(worldTickRuns.companionId, companionId)).orderBy(desc(worldTickRuns.windowStart)).limit(50),
       db.select().from(promptContextSnapshots).where(eq(promptContextSnapshots.companionId, companionId)).orderBy(desc(promptContextSnapshots.createdAt)).limit(20),
       db.select().from(stateChanges).where(eq(stateChanges.companionId, companionId)).orderBy(desc(stateChanges.createdAt)).limit(100),
+      db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companionId)).orderBy(desc(llmUsageLogs.createdAt)).limit(200),
     ]);
   const placeById = new Map(context.world.places.map((place) => [place.id, place]));
   const characterById = new Map(context.world.characters.map((character) => [character.id, character]));
@@ -83,6 +85,7 @@ export async function loadWorldDashboardData() {
       tickRuns: ticks,
       promptContexts: snapshots,
       stateChanges: changes,
+      llmUsage: usage,
     },
   };
 }

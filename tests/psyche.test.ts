@@ -49,6 +49,11 @@ test("daily reflection hard-clamps trait drift to 0.01", () => {
     traitUpdates: { initiative: 0.9, warmth: -0.9 },
     arcUpdates: [],
     tomorrowSeeds: [],
+    relationshipSummary: "",
+    placePreferenceUpdates: [],
+    interestUpdates: { added: [], cooled: [] },
+    characterUpdates: [],
+    weeklySummary: null,
   };
   const result = applyDailyReflection(INITIAL_STATE, reflection);
 

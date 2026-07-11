@@ -7,6 +7,7 @@ import type {
   SeedCard,
   SelectedMemory,
 } from "@/core/types";
+import type { LlmUsageContext } from "@/db/usageRepo";
 
 export interface ActorGroundedContext {
   currentTime: string;
@@ -43,6 +44,7 @@ export interface ActorPromptInput {
   userMessage?: string | null;
   recentMessages?: Array<{ role: string; text: string }>;
   groundedContext?: ActorGroundedContext;
+  usageContext?: LlmUsageContext;
 }
 
 export interface BudgetedActorPrompt {

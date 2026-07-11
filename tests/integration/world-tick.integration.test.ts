@@ -6,11 +6,15 @@ import {
   awaitingReplies,
   companions,
   externalInformation,
+  internalJournals,
+  knownPlaces,
+  llmUsageLogs,
   messages,
   promptContextSnapshots,
   shareCandidates,
   users,
   worldStates,
+  worldCharacters,
   worldTickRuns,
 } from "@/db/schema";
 import {
@@ -51,6 +55,8 @@ import { buildBudgetedActorPrompt } from "@/core/promptBuilder";
 import { reduceWorldTick } from "@/world/reducer";
 import { runWorldTick } from "@/world/tick";
 import { inferWorldSignals } from "@/world/userSignals";
+import { applyLongTermReflectionEvolution } from "@/db/reflectionRepo";
+import { recordLlmUsage } from "@/db/usageRepo";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 const enabled = Boolean(testDatabaseUrl);
@@ -83,11 +89,75 @@ test(
         .values({ userId: user.id, name: "Mira", configJson: DEFAULT_RUNTIME_CONFIG })
         .returning();
       assert.ok(companion);
-      await ensurePersistentWorld(
+      const persistentWorld = await ensurePersistentWorld(
         companion.id,
         DEFAULT_RUNTIME_CONFIG.character.profile,
         new Date("2026-07-10T02:07:00.000Z"),
       );
+      const [journal] = await db.insert(internalJournals).values({
+        companionId: companion.id,
+        date: "2026-07-09",
+        summary: "integration reflection",
+        reflection: "bounded evolution",
+      }).returning();
+      assert.ok(journal);
+      const reflection = {
+        summary: "integration reflection",
+        reflection: "bounded evolution",
+        moodUpdates: {},
+        driveUpdates: {},
+        relationshipUpdates: {},
+        traitUpdates: {},
+        arcUpdates: [],
+        tomorrowSeeds: [],
+        relationshipSummary: "relationship stable",
+        placePreferenceUpdates: [{
+          placeId: persistentWorld.homePlace.id,
+          familiarityDelta: 1,
+          impression: "更熟悉了一点",
+        }],
+        interestUpdates: { added: ["独立游戏开发"], cooled: [] },
+        characterUpdates: [{
+          stableKey: persistentWorld.characters[0]!.stableKey,
+          relationshipDelta: 1,
+          currentSituation: "最近一起完成了一个普通需求",
+        }],
+        weeklySummary: null,
+      };
+      const evolution = await applyLongTermReflectionEvolution({
+        companionId: companion.id,
+        journalId: journal.id,
+        reflection,
+        correlationId: "00000000-0000-4000-8000-000000000108",
+        now: new Date("2026-07-10T02:08:00.000Z"),
+      });
+      assert.equal(evolution.applied, true);
+      assert.equal((await applyLongTermReflectionEvolution({
+        companionId: companion.id,
+        journalId: journal.id,
+        reflection,
+        correlationId: "00000000-0000-4000-8000-000000000108",
+      })).applied, false);
+      const [evolvedPlace] = await db.select().from(knownPlaces).where(eq(knownPlaces.id, persistentWorld.homePlace.id));
+      const [evolvedCharacter] = await db.select().from(worldCharacters).where(eq(worldCharacters.id, persistentWorld.characters[0]!.id));
+      assert.ok(Math.abs((evolvedPlace?.familiarity ?? 0) - persistentWorld.homePlace.familiarity) <= 0.030001);
+      assert.ok(Math.abs((evolvedCharacter?.relationshipScore ?? 0) - persistentWorld.characters[0]!.relationshipScore) <= 0.020001);
+      await recordLlmUsage({
+        context: {
+          companionId: companion.id,
+          correlationId: "00000000-0000-4000-8000-000000000108",
+          category: "reflection",
+        },
+        model: "fixture/model",
+        promptTokens: 120,
+        completionTokens: 30,
+        totalTokens: 150,
+        costUsd: 0.001,
+        latencyMs: 42,
+        usedFallback: false,
+      });
+      const [usage] = await db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companion.id));
+      assert.equal(usage?.totalTokens, 150);
 
       const [message] = await db
         .insert(messages)

@@ -38,6 +38,7 @@ import {
 } from "@/db/messageOutboxRepo";
 import { applyUserWorldSignals } from "@/db/interactionRepo";
 import { persistWebCitations } from "@/db/providerRepo";
+import { applyLongTermReflectionEvolution } from "@/db/reflectionRepo";
 import { listActiveSharedKnowledge } from "@/db/interactionRepo";
 import {
   hasWaitingProactiveReply,
@@ -485,7 +486,11 @@ async function processTelegramMessage(
     correlationId,
   });
   const config = runtimeConfig(context);
-  const analyzed = await analyzeMessage(message.text, config.model);
+  const analyzed = await analyzeMessage(message.text, config.model, {
+    companionId: context.companion.id,
+    correlationId,
+    category: "analyzer",
+  });
   if (!await renewMessageProcessing(userMessage.row.id, leaseToken)) {
     throw new Error("Telegram processing lease expired during analysis");
   }
@@ -592,6 +597,7 @@ async function processTelegramMessage(
     repetitionScore,
     mirrorIndex,
     config,
+    usageContext: { companionId: context.companion.id, correlationId, category: "ego" },
   });
   const photoCooldownBlocked =
     hoursSince(photoToolStats.lastUsedAt) < TOOL_REGISTRY.generate_fake_photo.cooldownHours;
@@ -637,6 +643,7 @@ async function processTelegramMessage(
       .filter((item) => item.id !== userMessage.row.id)
       .map((item) => ({ role: item.role, text: item.text })),
     groundedContext,
+    usageContext: { companionId: context.companion.id, correlationId, category: "actor" },
   });
   if (!await renewMessageProcessing(userMessage.row.id, leaseToken)) {
     throw new Error("Telegram processing lease expired during actor generation");
@@ -930,6 +937,12 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     userMessage: null,
     recentMessages: recentMessages.map((message) => ({ role: message.role, text: message.text })),
     groundedContext,
+    usageContext: {
+      companionId: context.companion.id,
+      correlationId: reservation.id,
+      category: "actor",
+      metadata: { proactive: true, shareCandidateId: candidate.id },
+    },
   });
   await Promise.all([
     savePromptContextSnapshot({
@@ -1047,11 +1060,13 @@ export async function runDailyReflection(now = new Date()) {
   const context = await primaryContext();
   const config = runtimeConfig(context);
   const date = zonedDateKey(now, config.policy.quietHours.timeZone);
+  const correlationId = randomUUID();
   await logRuntimeEvent({
     userId: context.user.id,
     companionId: context.companion.id,
     type: "system.tick",
     source: "cron.daily",
+    correlationId,
     payloadJson: { at: now.toISOString(), date },
   });
   const activity = await listTodayActivity(
@@ -1059,7 +1074,34 @@ export async function runDailyReflection(now = new Date()) {
     date,
     config.policy.quietHours.timeZone,
   );
-  const generated = await reflectOnDay(activity, context.state, config);
+  const reflectionActivity = {
+    ...activity,
+    knownPlaces: context.world.places.map((place) => ({
+      id: place.id,
+      name: place.name,
+      familiarity: place.familiarity,
+      visitCount: place.visitCount,
+      lastVisitedAt: place.lastVisitedAt,
+    })),
+    fictionalCharacters: context.world.characters.map((character) => ({
+      stableKey: character.stableKey,
+      name: character.name,
+      relationshipScore: character.relationshipScore,
+      currentSituation: character.currentSituation,
+    })),
+  };
+  const generated = await reflectOnDay(
+    reflectionActivity,
+    context.state,
+    config,
+    {
+      companionId: context.companion.id,
+      correlationId,
+      category: "reflection",
+      metadata: { date },
+    },
+    new Date(`${date}T12:00:00+08:00`).getUTCDay() === 0,
+  );
   let growth: ReturnType<typeof applyDailyReflection> | null = null;
   let journalResult: Awaited<ReturnType<typeof applyDailyReflectionTransaction>> | null = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -1076,6 +1118,13 @@ export async function runDailyReflection(now = new Date()) {
         traitUpdatesJson: generated.reflection.traitUpdates,
         beliefUpdatesJson: {},
         arcUpdatesJson: generated.reflection.arcUpdates,
+        relationshipSummary: generated.reflection.relationshipSummary,
+        placePreferenceUpdatesJson: generated.reflection.placePreferenceUpdates,
+        interestUpdatesJson: generated.reflection.interestUpdates,
+        characterUpdatesJson: generated.reflection.characterUpdates,
+        weeklySummary: generated.reflection.weeklySummary,
+        correlationId,
+        sourceType: "daily_reflection",
       },
       expectedState: latestState,
       state: growth.state,
@@ -1093,8 +1142,21 @@ export async function runDailyReflection(now = new Date()) {
   if (!growth || !journalResult || journalResult.conflict || !journalResult.row) {
     throw new Error("Companion state changed too often during daily reflection");
   }
+  const evolution = await applyLongTermReflectionEvolution({
+    companionId: context.companion.id,
+    journalId: journalResult.row.id,
+    reflection: generated.reflection,
+    correlationId,
+    now,
+  });
   if (!journalResult.created) {
-    return { reflected: false, reason: "already_reflected", date, journalId: journalResult.row.id };
+    return {
+      reflected: false,
+      reason: "already_reflected",
+      date,
+      journalId: journalResult.row.id,
+      evolution,
+    };
   }
   if (generated.reflection.tomorrowSeeds.length) {
     await logRuntimeEvent({
@@ -1111,5 +1173,6 @@ export async function runDailyReflection(now = new Date()) {
     journalId: journalResult.row.id,
     stateChanges: growth.changes.length,
     tomorrowSeeds: generated.reflection.tomorrowSeeds.length,
+    evolution,
   };
 }

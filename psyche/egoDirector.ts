@@ -12,6 +12,7 @@ import type { DriveAssessment } from "@/psyche/idDrive";
 import { callJson } from "@/llm/client";
 import { EGO_SYSTEM } from "@/llm/prompts";
 import { asString, asStringArray, type JsonObject } from "@/llm/json";
+import type { LlmUsageContext } from "@/db/usageRepo";
 
 const MODES: ActionMode[] = [
   "technical_companion",
@@ -37,6 +38,7 @@ interface DirectOptions {
   repetitionScore: number;
   mirrorIndex: number;
   config: RuntimeConfig;
+  usageContext?: LlmUsageContext;
 }
 
 function fallbackPlan(options: DirectOptions): ActionPlan {
@@ -115,6 +117,7 @@ export async function directAction(options: DirectOptions) {
     model: options.config.model,
     temperature: 0.25,
     maxTokens: 650,
+    usageContext: options.usageContext,
   });
   return { plan: result.data, raw: result.raw, usedFallback: result.usedFallback, error: result.error };
 }

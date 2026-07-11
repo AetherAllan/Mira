@@ -225,4 +225,17 @@ export interface DailyReflection {
   traitUpdates: Partial<Traits>;
   arcUpdates: Array<{ id: string; progressDelta: number; currentQuestion?: string }>;
   tomorrowSeeds: SeedCard[];
+  relationshipSummary: string;
+  placePreferenceUpdates: Array<{
+    placeId: string;
+    familiarityDelta: number;
+    impression?: string;
+  }>;
+  interestUpdates: { added: string[]; cooled: string[] };
+  characterUpdates: Array<{
+    stableKey: string;
+    relationshipDelta: number;
+    currentSituation?: string;
+  }>;
+  weeklySummary: string | null;
 }

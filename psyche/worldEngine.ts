@@ -2,6 +2,7 @@ import type { CompanionState, RuntimeConfig, SeedCard } from "@/core/types";
 import { callJson } from "@/llm/client";
 import { WORLD_SYSTEM } from "@/llm/prompts";
 import { asObject, asString, type JsonObject } from "@/llm/json";
+import type { LlmUsageContext } from "@/db/usageRepo";
 
 export interface GeneratedWorldEvent {
   title: string;
@@ -32,7 +33,12 @@ function validateWorldEvent(value: JsonObject): GeneratedWorldEvent | null {
   };
 }
 
-export async function generateWorldEvent(seed: SeedCard, state: CompanionState, config: RuntimeConfig) {
+export async function generateWorldEvent(
+  seed: SeedCard,
+  state: CompanionState,
+  config: RuntimeConfig,
+  usageContext?: LlmUsageContext,
+) {
   const fallback: GeneratedWorldEvent = {
     title: "一段没有被拍下来的场景",
     content: `Mira 在内在世界里停在这个念头旁边：${seed.text}。它没有被包装成现实经历，只留下了一点具体质感。`,
@@ -52,6 +58,7 @@ export async function generateWorldEvent(seed: SeedCard, state: CompanionState, 
     model: config.model,
     temperature: 0.7,
     maxTokens: 700,
+    usageContext,
   });
   return { event: result.data, raw: result.raw, usedFallback: result.usedFallback, error: result.error };
 }

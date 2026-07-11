@@ -795,6 +795,39 @@ export const promptContextSnapshots = pgTable(
   ],
 );
 
+export const llmUsageLogs = pgTable(
+  "llm_usage_logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    correlationId: uuid("correlation_id"),
+    category: text("category", {
+      enum: ["analyzer", "ego", "actor", "world_planning", "news_processing", "thought", "embedding", "reflection"],
+    }).notNull(),
+    provider: text("provider").notNull().default("openrouter"),
+    model: text("model").notNull(),
+    promptTokens: integer("prompt_tokens").notNull().default(0),
+    completionTokens: integer("completion_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    costUsd: real("cost_usd"),
+    latencyMs: integer("latency_ms").notNull(),
+    usedFallback: boolean("used_fallback").notNull().default(false),
+    error: text("error"),
+    metadataJson: jsonb("metadata_json").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    index("llm_usage_logs_companion_created_idx").on(table.companionId, table.createdAt),
+    index("llm_usage_logs_companion_category_created_idx").on(
+      table.companionId,
+      table.category,
+      table.createdAt,
+    ),
+  ],
+);
+
 export const worldTickRuns = pgTable(
   "world_tick_runs",
   {
@@ -1010,6 +1043,12 @@ export const internalJournals = pgTable(
     traitUpdatesJson: jsonb("trait_updates_json").notNull().default({}),
     beliefUpdatesJson: jsonb("belief_updates_json").notNull().default({}),
     arcUpdatesJson: jsonb("arc_updates_json").notNull().default([]),
+    relationshipSummary: text("relationship_summary"),
+    placePreferenceUpdatesJson: jsonb("place_preference_updates_json").notNull().default([]),
+    interestUpdatesJson: jsonb("interest_updates_json").notNull().default({}),
+    characterUpdatesJson: jsonb("character_updates_json").notNull().default([]),
+    weeklySummary: text("weekly_summary"),
+    evolutionAppliedAt: timestamp("evolution_applied_at", { withTimezone: true }),
     correlationId: uuid("correlation_id"),
     sourceType: text("source_type"),
     sourceId: text("source_id"),
@@ -1043,5 +1082,6 @@ export type AwaitingReplyRow = typeof awaitingReplies.$inferSelect;
 export type ExternalInformationRow = typeof externalInformation.$inferSelect;
 export type ProviderCacheRow = typeof providerCache.$inferSelect;
 export type PromptContextSnapshotRow = typeof promptContextSnapshots.$inferSelect;
+export type LlmUsageLogRow = typeof llmUsageLogs.$inferSelect;
 export type WorldTickRunRow = typeof worldTickRuns.$inferSelect;
 export type ProposedWorldMutationRow = typeof proposedWorldMutations.$inferSelect;

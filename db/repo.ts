@@ -882,7 +882,10 @@ export async function applyDailyReflectionTransaction(input: {
     inserted_journal AS (
       INSERT INTO internal_journals (
         companion_id, date, summary, reflection,
-        trait_updates_json, belief_updates_json, arc_updates_json
+        trait_updates_json, belief_updates_json, arc_updates_json,
+        relationship_summary, place_preference_updates_json,
+        interest_updates_json, character_updates_json, weekly_summary,
+        correlation_id, source_type
       )
       SELECT
         ${journalInput.companionId}::uuid,
@@ -891,7 +894,14 @@ export async function applyDailyReflectionTransaction(input: {
         ${journalInput.reflection},
         ${JSON.stringify(journalInput.traitUpdatesJson ?? {})}::jsonb,
         ${JSON.stringify(journalInput.beliefUpdatesJson ?? {})}::jsonb,
-        ${JSON.stringify(journalInput.arcUpdatesJson ?? [])}::jsonb
+        ${JSON.stringify(journalInput.arcUpdatesJson ?? [])}::jsonb,
+        ${journalInput.relationshipSummary ?? null},
+        ${JSON.stringify(journalInput.placePreferenceUpdatesJson ?? [])}::jsonb,
+        ${JSON.stringify(journalInput.interestUpdatesJson ?? {})}::jsonb,
+        ${JSON.stringify(journalInput.characterUpdatesJson ?? [])}::jsonb,
+        ${journalInput.weeklySummary ?? null},
+        ${journalInput.correlationId ?? null}::uuid,
+        ${journalInput.sourceType ?? "daily_reflection"}
       WHERE EXISTS (SELECT 1 FROM locked_state)
       ON CONFLICT (companion_id, date) DO NOTHING
       RETURNING id
@@ -912,7 +922,7 @@ export async function applyDailyReflectionTransaction(input: {
     inserted_changes AS (
       INSERT INTO state_changes (
         companion_id, target_path, before_json, after_json,
-        delta_json, reason, caused_by
+        delta_json, reason, caused_by, correlation_id
       )
       SELECT
         ${journalInput.companionId}::uuid,
@@ -921,7 +931,8 @@ export async function applyDailyReflectionTransaction(input: {
         item->'afterJson',
         item->'deltaJson',
         item->>'reason',
-        item->>'causedBy'
+        item->>'causedBy',
+        ${journalInput.correlationId ?? null}::uuid
       FROM jsonb_array_elements(${changesJson}::jsonb) AS item
       WHERE EXISTS (SELECT 1 FROM inserted_journal)
       RETURNING id
@@ -943,7 +954,7 @@ export async function applyDailyReflectionTransaction(input: {
       RETURNING id
     ),
     inserted_change_events AS (
-      INSERT INTO events (user_id, companion_id, type, source, payload_json)
+      INSERT INTO events (user_id, companion_id, type, source, payload_json, correlation_id)
       SELECT
         ${input.userId ?? null}::uuid,
         ${journalInput.companionId}::uuid,
@@ -955,13 +966,14 @@ export async function applyDailyReflectionTransaction(input: {
           'after', item->'afterJson',
           'delta', item->'deltaJson',
           'reason', item->>'reason'
-        )
+        ),
+        ${journalInput.correlationId ?? null}::uuid
       FROM jsonb_array_elements(${changesJson}::jsonb) AS item
       WHERE EXISTS (SELECT 1 FROM inserted_journal)
       RETURNING id
     ),
     inserted_event AS (
-      INSERT INTO events (user_id, companion_id, type, source, payload_json)
+      INSERT INTO events (user_id, companion_id, type, source, payload_json, correlation_id)
       SELECT
         ${input.userId ?? null}::uuid,
         ${journalInput.companionId}::uuid,
@@ -975,7 +987,8 @@ export async function applyDailyReflectionTransaction(input: {
           arcUpdates: journalInput.arcUpdatesJson ?? [],
         })}::jsonb
           || ${JSON.stringify(input.eventPayload ?? {})}::jsonb
-          || jsonb_build_object('journalId', (SELECT id FROM inserted_journal LIMIT 1))
+          || jsonb_build_object('journalId', (SELECT id FROM inserted_journal LIMIT 1)),
+        ${journalInput.correlationId ?? null}::uuid
       WHERE EXISTS (SELECT 1 FROM inserted_journal)
       RETURNING id
     )

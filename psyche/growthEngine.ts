@@ -13,6 +13,7 @@ import type {
 import { callJson } from "@/llm/client";
 import { REFLECTION_SYSTEM } from "@/llm/prompts";
 import { asObject, asString, asStringArray, type JsonObject } from "@/llm/json";
+import type { LlmUsageContext } from "@/db/usageRepo";
 
 export interface StateChangeDraft {
   targetPath: string;
@@ -226,6 +227,34 @@ function validateSeeds(value: unknown): SeedCard[] {
     .slice(0, 5);
 }
 
+function validatePlacePreferenceUpdates(value: unknown): DailyReflection["placePreferenceUpdates"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const update = asObject(item);
+    const placeId = asString(update?.placeId);
+    if (!update || !placeId) return [];
+    return [{
+      placeId,
+      familiarityDelta: delta(update.familiarityDelta, 0.03),
+      impression: asString(update.impression).slice(0, 500) || undefined,
+    }];
+  }).slice(0, 5);
+}
+
+function validateCharacterUpdates(value: unknown): DailyReflection["characterUpdates"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const update = asObject(item);
+    const stableKey = asString(update?.stableKey);
+    if (!update || !stableKey) return [];
+    return [{
+      stableKey,
+      relationshipDelta: delta(update.relationshipDelta, 0.02),
+      currentSituation: asString(update.currentSituation).slice(0, 500) || undefined,
+    }];
+  }).slice(0, 6);
+}
+
 function validateReflection(value: JsonObject): DailyReflection | null {
   const summary = asString(value.summary);
   const reflection = asString(value.reflection);
@@ -251,10 +280,24 @@ function validateReflection(value: JsonObject): DailyReflection | null {
     traitUpdates: parseUpdates(value.traitUpdates, TRAIT_KEYS, 0.01),
     arcUpdates,
     tomorrowSeeds: validateSeeds(value.tomorrowSeeds),
+    relationshipSummary: asString(value.relationshipSummary).slice(0, 1_000),
+    placePreferenceUpdates: validatePlacePreferenceUpdates(value.placePreferenceUpdates),
+    interestUpdates: {
+      added: asStringArray(asObject(value.interestUpdates)?.added).slice(0, 2),
+      cooled: asStringArray(asObject(value.interestUpdates)?.cooled).slice(0, 2),
+    },
+    characterUpdates: validateCharacterUpdates(value.characterUpdates),
+    weeklySummary: asString(value.weeklySummary).slice(0, 2_000) || null,
   };
 }
 
-export async function reflectOnDay(activity: unknown, state: CompanionState, config: RuntimeConfig) {
+export async function reflectOnDay(
+  activity: unknown,
+  state: CompanionState,
+  config: RuntimeConfig,
+  usageContext?: LlmUsageContext,
+  includeWeeklySummary = false,
+) {
   const fallback: DailyReflection = {
     summary: "今天的记录不足以支持明显的人格变化。",
     reflection: "保留当前边界，只让情绪和驱动力轻微回归稳定。",
@@ -272,13 +315,23 @@ export async function reflectOnDay(activity: unknown, state: CompanionState, con
         enabled: true,
       },
     ],
+    relationshipSummary: "关系没有出现需要改写长期判断的新证据。",
+    placePreferenceUpdates: [],
+    interestUpdates: { added: [], cooled: [] },
+    characterUpdates: [],
+    weeklySummary: null,
   };
   const result = await callJson({
     messages: [
       { role: "system", content: REFLECTION_SYSTEM },
       {
         role: "user",
-        content: JSON.stringify({ state, beliefs: config.character.beliefs, activity }).slice(0, 18_000),
+        content: JSON.stringify({
+          reflectionPeriod: includeWeeklySummary ? "daily_and_weekly" : "daily",
+          state,
+          beliefs: config.character.beliefs,
+          activity,
+        }).slice(0, 18_000),
       },
     ],
     fallback,
@@ -286,6 +339,12 @@ export async function reflectOnDay(activity: unknown, state: CompanionState, con
     model: config.model,
     temperature: 0.35,
     maxTokens: 1200,
+    usageContext,
   });
-  return { reflection: result.data, raw: result.raw, usedFallback: result.usedFallback, error: result.error };
+  return {
+    reflection: includeWeeklySummary ? result.data : { ...result.data, weeklySummary: null },
+    raw: result.raw,
+    usedFallback: result.usedFallback,
+    error: result.error,
+  };
 }

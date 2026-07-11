@@ -205,6 +205,12 @@ export async function ingestBeijingExternalInformation(
   const drafts = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const embeddings = await embedWithBgeM3(
     drafts.map((draft) => `${draft.title}\n${draft.factualSummary}`),
+    {
+      companionId,
+      correlationId,
+      category: "embedding",
+      metadata: { itemCount: drafts.length, source: "external_ingestion" },
+    },
   );
   if (embeddings) drafts.forEach((draft, index) => { draft.embedding = embeddings[index]; });
   const persisted = await persistExternalFacts({ companionId, drafts, fetchedAt: now, correlationId });

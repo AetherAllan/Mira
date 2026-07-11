@@ -18,6 +18,7 @@ export default async function WorldDebugPage() {
     ["Tick Log", debug.tickRuns, "窗口、lease、seed、重试和结果。"],
     ["Prompt Context", debug.promptContexts, "脱敏 context、token 预算、选中 ID 与 hash。"],
     ["State Changes", debug.stateChanges, "每次变化的 before / after / reason / correlation。"],
+    ["LLM Usage", debug.llmUsage, "Actor、planner、news、embedding 与 reflection 的 tokens、成本、延迟和 fallback。"],
   ] as const;
   return <><PageIntro title="World Debug" description="后台权威视图。这里允许看内部状态，但所有字段仍按 companion 隔离并可沿 correlationId 追踪。" /><div className="grid gap-4 xl:grid-cols-2">{sections.map(([title, value, description]) => <Panel key={title} title={title} description={description}><div className="mb-3 font-mono text-[10px] text-zinc-600">{Array.isArray(value) ? `${value.length} rows` : "current snapshot"}</div><JsonInspector data={value} label={`${title} raw JSON`} /></Panel>)}</div></>;
 }

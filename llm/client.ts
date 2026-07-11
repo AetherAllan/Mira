@@ -1,4 +1,5 @@
 import { parseJsonObject, type JsonObject } from "@/llm/json";
+import { recordLlmUsage, type LlmUsageContext } from "@/db/usageRepo";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -15,6 +16,12 @@ interface ChatCompletionResponse {
       }>;
     };
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    cost?: number;
+  };
 }
 
 export interface WebCitation {
@@ -39,6 +46,7 @@ interface JsonCallOptions<T> {
   temperature?: number;
   maxTokens?: number;
   webSearch?: boolean;
+  usageContext?: LlmUsageContext;
 }
 
 export async function callJson<T>({
@@ -49,10 +57,32 @@ export async function callJson<T>({
   temperature = 0.4,
   maxTokens = 900,
   webSearch = false,
+  usageContext,
 }: JsonCallOptions<T>): Promise<JsonCallResult<T>> {
+  const startedAt = Date.now();
+  const selectedModel = process.env.MODEL?.trim() || model;
+  const finish = async (
+    result: JsonCallResult<T>,
+    usage?: ChatCompletionResponse["usage"],
+  ) => {
+    if (usageContext) {
+      await recordLlmUsage({
+        context: usageContext,
+        model: selectedModel,
+        promptTokens: usage?.prompt_tokens,
+        completionTokens: usage?.completion_tokens,
+        totalTokens: usage?.total_tokens,
+        costUsd: usage?.cost,
+        latencyMs: Date.now() - startedAt,
+        usedFallback: result.usedFallback,
+        error: result.error,
+      }).catch((error) => console.error("Failed to record LLM usage", error));
+    }
+    return result;
+  };
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    return { data: fallback, raw: null, usedFallback: true, error: "API_KEY is not configured", citations: [] };
+    return finish({ data: fallback, raw: null, usedFallback: true, error: "API_KEY is not configured", citations: [] });
   }
 
   const baseUrl = (process.env.BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
@@ -68,7 +98,7 @@ export async function callJson<T>({
         "X-Title": "Mira",
       },
       body: JSON.stringify({
-        model: process.env.MODEL?.trim() || model,
+        model: selectedModel,
         messages,
         temperature,
         max_tokens: maxTokens,
@@ -91,24 +121,24 @@ export async function callJson<T>({
       error?: { message?: string };
     };
     if (!response.ok) {
-      return {
+      return finish({
         data: fallback,
         raw: null,
         usedFallback: true,
         error: body.error?.message || `OpenRouter returned ${response.status}`,
         citations: [],
-      };
+      }, body.usage);
     }
 
     const content = body.choices?.[0]?.message?.content;
     if (!content) {
-      return { data: fallback, raw: null, usedFallback: true, error: "OpenRouter returned no content", citations: [] };
+      return finish({ data: fallback, raw: null, usedFallback: true, error: "OpenRouter returned no content", citations: [] }, body.usage);
     }
 
     const raw = parseJsonObject(content);
     const validated = raw ? validate(raw) : null;
     if (!raw || !validated) {
-      return { data: fallback, raw, usedFallback: true, error: "Model JSON failed validation", citations: [] };
+      return finish({ data: fallback, raw, usedFallback: true, error: "Model JSON failed validation", citations: [] }, body.usage);
     }
     const citations = (body.choices?.[0]?.message?.annotations ?? []).flatMap((annotation) => {
       const citation = annotation.type === "url_citation" ? annotation.url_citation : undefined;
@@ -119,14 +149,14 @@ export async function callJson<T>({
         content: (citation.content ?? citation.title).slice(0, 1_200),
       }];
     });
-    return { data: validated, raw, usedFallback: false, error: null, citations };
+    return finish({ data: validated, raw, usedFallback: false, error: null, citations }, body.usage);
   } catch (error) {
-    return {
+    return finish({
       data: fallback,
       raw: null,
       usedFallback: true,
       error: error instanceof Error ? error.message : "Unknown OpenRouter error",
       citations: [],
-    };
+    });
   }
 }

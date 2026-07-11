@@ -125,6 +125,7 @@ export async function act(input: ActorPromptInput) {
     temperature: 0.65,
     maxTokens: 950,
     webSearch: input.plan.webAccess === "search",
+    usageContext: input.usageContext,
   });
   return {
     output: result.data,

@@ -1,5 +1,6 @@
 import type { JsonValue, MessageAnalysis, Topic, WorldSignal, WorldSignalType } from "@/core/types";
 import { callJson } from "@/llm/client";
+import type { LlmUsageContext } from "@/db/usageRepo";
 import { ANALYZER_SYSTEM } from "@/llm/prompts";
 import { asObject, asString, clamp01, type JsonObject } from "@/llm/json";
 import { inferWorldSignals } from "@/world/userSignals";
@@ -121,7 +122,7 @@ function mergeWorldSignals(primary: WorldSignal[], fallback: WorldSignal[]) {
   return [...unique.values()].slice(0, 8);
 }
 
-export async function analyzeMessage(text: string, model?: string): Promise<{
+export async function analyzeMessage(text: string, model?: string, usageContext?: LlmUsageContext): Promise<{
   analysis: MessageAnalysis;
   raw: JsonObject | null;
   usedFallback: boolean;
@@ -141,6 +142,7 @@ export async function analyzeMessage(text: string, model?: string): Promise<{
     model,
     temperature: 0.1,
     maxTokens: 500,
+    usageContext,
   });
   return {
     analysis: {
