@@ -6,21 +6,33 @@ import {
   failWorldTickRun,
   getWorldState,
   listScheduleBlocksForDate,
+  listRecentPhysicalWorldEvents,
   listWorldCompanions,
   worldStateRowToDomain,
 } from "@/db/worldRepo";
 import { zonedDateKey } from "@/lib/time";
 import { DEFAULT_CHARACTER_PROFILE } from "@/seed/world";
+import {
+  applyEventConsequences,
+  generateOrdinaryWorldEvent,
+  validatePhysicalWorldEvent,
+} from "@/world/events";
+import { evaluateTripFeasibility } from "@/world/feasibility";
+import { placeDistanceMeters } from "@/world/places";
 import { buildDailySchedule } from "@/world/planner";
-import { createWorldSeed, seededChoice } from "@/world/random";
+import { createSeededRandom, createWorldSeed, seededChoice } from "@/world/random";
 import {
   getCompletedTickWindow,
   reduceOfflineGap,
   reduceWorldTick,
 } from "@/world/reducer";
 import type { CharacterProfile } from "@/core/types";
-import type { KnownPlaceRow, WorldStateRow } from "@/db/schema";
-import type { ScheduleBlock } from "@/world/types";
+import type {
+  KnownPlaceRow,
+  WorldCharacterRow,
+  WorldStateRow,
+} from "@/db/schema";
+import type { ScheduleBlock, WorldEvent } from "@/world/types";
 
 const ENGINE_VERSION = "world-v1";
 const TICK_MS = 15 * 60_000;
@@ -44,11 +56,17 @@ function profileOrDefault(value: CharacterProfile | undefined) {
 }
 
 function selectOptionalPlace(places: KnownPlaceRow[], companionId: string, localDate: string) {
+  const weekDay = new Date(`${localDate}T00:00:00+08:00`).getUTCDay();
+  const isWeekend = weekDay === 0 || weekDay === 6;
+  const origin = places.find(
+    (place) => place.metadataJson.placeRole === (isWeekend ? "home" : "work"),
+  );
   const candidates = places.filter(
     (place) =>
       place.status === "want_to_visit" &&
       place.canonicalKey !== DEFAULT_CHARACTER_PROFILE.homePlaceKey &&
-      place.canonicalKey !== DEFAULT_CHARACTER_PROFILE.workPlaceKey,
+      place.canonicalKey !== DEFAULT_CHARACTER_PROFILE.workPlaceKey &&
+      (estimatedTravelMinutes(origin, place) ?? Number.POSITIVE_INFINITY) <= 60,
   );
   return seededChoice(candidates, createWorldSeed(companionId, localDate, "optional-place-v1"));
 }
@@ -90,6 +108,98 @@ function activeBlockAt(schedule: ScheduleBlock[], at: Date) {
       block.startAt.getTime() <= instant &&
       block.endAt.getTime() > instant,
   );
+}
+
+function estimatedTravelMinutes(first: KnownPlaceRow | undefined, second: KnownPlaceRow | undefined) {
+  if (!first || !second) return undefined;
+  if (first.id === second.id) return 0;
+  const distance = placeDistanceMeters(
+    { latitude: first.latitude ?? undefined, longitude: first.longitude ?? undefined },
+    { latitude: second.latitude ?? undefined, longitude: second.longitude ?? undefined },
+  );
+  return distance === undefined ? undefined : Math.ceil(10 + distance / 350);
+}
+
+async function ordinaryEventForTick(input: {
+  companionId: string;
+  correlationId: string;
+  randomSeed: string;
+  occurredAt: Date;
+  schedule: ScheduleBlock[];
+  places: KnownPlaceRow[];
+  characters: WorldCharacterRow[];
+}): Promise<WorldEvent | null> {
+  const active = activeBlockAt(input.schedule, input.occurredAt);
+  if (!active?.locationId || active.type === "sleep" || active.type === "commute") return null;
+  const place = input.places.find((candidate) => candidate.id === active.locationId);
+  if (!place) return null;
+
+  const existingEvents = await listRecentPhysicalWorldEvents(
+    input.companionId,
+    new Date(input.occurredAt.getTime() - 36 * 60 * 60_000),
+  );
+  let event = generateOrdinaryWorldEvent({
+    companionId: input.companionId,
+    occurredAt: input.occurredAt,
+    locationId: active.locationId,
+    scheduleType: active.type,
+    correlationId: input.correlationId,
+    seed: createWorldSeed(input.randomSeed, "ordinary-event"),
+    existingEvents,
+  });
+  if (!event) return null;
+
+  if (active.type === "work" && createSeededRandom(`${input.randomSeed}:character`)() < 0.35) {
+    const coworker = seededChoice(
+      input.characters.filter((character) => character.relationshipType === "coworker"),
+      createWorldSeed(input.randomSeed, "coworker"),
+    );
+    if (coworker) {
+      event = {
+        ...event,
+        causeType: "character_interaction",
+        causeId: `character:${coworker.id}:${event.causeId ?? "ordinary"}`,
+        characterIds: [coworker.id],
+      };
+    }
+  }
+
+  const privateRoutinePlace =
+    place.metadataJson.placeRole === "home" || place.metadataJson.placeRole === "work";
+  const remainingMinutes = Math.max(
+    0,
+    (active.endAt.getTime() - input.occurredAt.getTime()) / 60_000,
+  );
+  const feasibility = evaluateTripFeasibility({
+    currentLocationId: active.locationId,
+    destinationLocationId: active.locationId,
+    currentTime: input.occurredAt,
+    visitStartAt: input.occurredAt,
+    travelMinutes: 0,
+    estimatedCost: 0,
+    maximumCost: 120,
+    availableWindowMinutes: remainingMinutes,
+    minimumVisitMinutes: 0,
+    openingStatus: privateRoutinePlace ? "open" : "unknown",
+    weatherRisk: 0,
+    reservationRequired: false,
+    scheduleAllows: true,
+  });
+  const previous = existingEvents[0];
+  const previousPlace = previous?.locationId
+    ? input.places.find((candidate) => candidate.id === previous.locationId)
+    : undefined;
+  const validation = validatePhysicalWorldEvent({
+    authority: "world_engine",
+    event,
+    destinationLocationId: active.locationId,
+    feasibility,
+    scheduleBlock: active,
+    knownPlaceIds: input.places.map((candidate) => candidate.id),
+    previousPhysicalEvent: previous,
+    travelMinutesFromPrevious: estimatedTravelMinutes(previousPlace, place),
+  });
+  return validation.valid ? event : null;
 }
 
 async function runAggregateCatchUp(input: {
@@ -244,12 +354,27 @@ async function runCompanionTick(
         windowEnd,
         correlationId: claim.correlationId,
       });
+      const worldEvent = await ordinaryEventForTick({
+        companionId: companion.id,
+        correlationId: claim.correlationId,
+        randomSeed,
+        occurredAt: windowEnd,
+        schedule: reduced.schedule,
+        places: context.places,
+        characters: context.characters,
+      });
+      if (worldEvent) {
+        const consequences = applyEventConsequences(reduced.state, worldEvent);
+        reduced.state = consequences.state;
+        reduced.stateChanges.push(...consequences.stateChanges);
+      }
       if (created) reduced.state.lastDailyPlanAt = windowEnd;
       stateRow = await commitWorldTick({
         claim,
         expectedState: stateRow,
         result: reduced,
         mode: "detailed",
+        worldEvent,
       });
       processedWindows += 1;
     } catch (error) {

@@ -1,5 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { CharacterProfile } from "@/core/types";
 import { getDb } from "@/db/client";
 import {
@@ -9,6 +22,7 @@ import {
   scheduleBlocks,
   stateChanges,
   worldCharacters,
+  worldEvents,
   worldStates,
   worldTickRuns,
   type KnownPlaceRow,
@@ -24,7 +38,7 @@ import {
 } from "@/seed/world";
 import { getTickWindow } from "@/world/reducer";
 import type { WorldTickResult } from "@/world/reducer";
-import type { ScheduleBlock, WorldState } from "@/world/types";
+import type { ScheduleBlock, WorldEvent, WorldState } from "@/world/types";
 
 type NewKnownPlace = typeof knownPlaces.$inferInsert;
 type NewWorldCharacter = typeof worldCharacters.$inferInsert;
@@ -115,6 +129,119 @@ export function listWorldCharacters(companionId: string) {
     .from(worldCharacters)
     .where(eq(worldCharacters.companionId, companionId))
     .orderBy(asc(worldCharacters.stableKey));
+}
+
+export async function createFictionalWorldCharacter(input: {
+  companionId: string;
+  stableKey: string;
+  name: string;
+  role: string;
+  relationshipType: typeof worldCharacters.$inferInsert.relationshipType;
+  personalityTraits?: string[];
+  currentSituation?: string;
+  metadata?: Record<string, unknown>;
+  correlationId: string;
+}) {
+  if (input.metadata?.fictional !== true) {
+    throw new Error("New world characters must be explicitly fictional");
+  }
+  const stableKey = input.stableKey.trim();
+  const name = input.name.trim();
+  const role = input.role.trim();
+  if (!stableKey || !name || !role) throw new Error("World character identity is incomplete");
+
+  return getDb().transaction(async (tx) => {
+    const [created] = await tx
+      .insert(worldCharacters)
+      .values({
+        companionId: input.companionId,
+        stableKey,
+        name,
+        role,
+        relationshipType: input.relationshipType,
+        personalityTraitsJson: input.personalityTraits ?? [],
+        relationshipScore: 0.2,
+        currentSituation: input.currentSituation,
+        activeOpenLoopsJson: [],
+        metadataJson: input.metadata,
+        isFictional: true,
+      })
+      .onConflictDoNothing({
+        target: [worldCharacters.companionId, worldCharacters.stableKey],
+      })
+      .returning();
+    if (created) {
+      await tx.insert(events).values({
+        companionId: input.companionId,
+        type: "world.character.created",
+        source: "world.engine",
+        correlationId: input.correlationId,
+        payloadJson: {
+          characterId: created.id,
+          stableKey,
+          fictional: true,
+        },
+      });
+      return created;
+    }
+    const [existing] = await tx
+      .select()
+      .from(worldCharacters)
+      .where(
+        and(
+          eq(worldCharacters.companionId, input.companionId),
+          eq(worldCharacters.stableKey, stableKey),
+        ),
+      )
+      .limit(1);
+    if (!existing) throw new Error("World character insert conflicted without an existing row");
+    return existing;
+  });
+}
+
+function worldEventRowToDomain(row: typeof worldEvents.$inferSelect): WorldEvent {
+  return {
+    id: row.id,
+    companionId: row.companionId,
+    realityLayer: row.realityLayer,
+    idempotencyKey: row.idempotencyKey ?? `legacy:${row.id}`,
+    correlationId: row.correlationId ?? "00000000-0000-4000-8000-000000000000",
+    characterIds: row.characterIdsJson,
+    type: row.type,
+    title: row.title,
+    description: row.content,
+    occurredAt: row.occurredAt,
+    locationId: row.locationId ?? undefined,
+    causeType: row.causeType ?? "previous_event",
+    causeId: row.causeId ?? undefined,
+    emotionalImpact: row.emotionalImpactJson,
+    consequences: row.consequencesJson,
+    importance: row.importance,
+    sharePotential: row.sharePotential,
+    randomSeed: row.randomSeed ?? undefined,
+    expiresAt: row.expiresAt ?? undefined,
+  };
+}
+
+export async function listRecentPhysicalWorldEvents(
+  companionId: string,
+  since: Date,
+  limit = 50,
+) {
+  const rows = await getDb()
+    .select()
+    .from(worldEvents)
+    .where(
+      and(
+        eq(worldEvents.companionId, companionId),
+        eq(worldEvents.realityLayer, "physical"),
+        isNotNull(worldEvents.idempotencyKey),
+        gte(worldEvents.occurredAt, since),
+      ),
+    )
+    .orderBy(desc(worldEvents.occurredAt))
+    .limit(Math.max(1, Math.min(limit, 200)));
+  return rows.map(worldEventRowToDomain);
 }
 
 export async function getPersistentWorldContext(
@@ -224,6 +351,7 @@ export function worldStateRowToDomain(row: WorldStateRow): WorldState {
     disappointment: row.disappointment,
     attachment: row.attachment,
     shareDesire: row.shareDesire,
+    affectReasons: row.emotionReasonsJson as WorldState["affectReasons"],
     lastChangeReason: row.lastChangeReason ?? undefined,
     lastCorrelationId: row.lastCorrelationId ?? undefined,
     lastWorldTickAt: row.lastWorldTickAt,
@@ -416,6 +544,7 @@ export async function commitWorldTick(input: {
   expectedState: WorldStateRow;
   result: WorldTickResult;
   mode: "detailed" | "aggregate";
+  worldEvent?: WorldEvent | null;
   committedAt?: Date;
 }) {
   const committedAt = input.committedAt ?? new Date();
@@ -486,6 +615,7 @@ export async function commitWorldTick(input: {
         disappointment: next.disappointment,
         attachment: next.attachment,
         shareDesire: next.shareDesire,
+        emotionReasonsJson: next.affectReasons ?? lockedState.emotionReasonsJson,
         lastChangeReason:
           input.mode === "aggregate" ? "aggregated offline world progression" : "world tick",
         lastCorrelationId: input.claim.correlationId,
@@ -504,6 +634,30 @@ export async function commitWorldTick(input: {
       .returning();
     if (!updatedState) throw new WorldStateConflictError("World state update lost its version race");
 
+    if (
+      next.currentLocationId &&
+      next.currentLocationId !== lockedState.currentLocationId
+    ) {
+      const visitedPlace = and(
+        eq(knownPlaces.id, next.currentLocationId),
+        eq(knownPlaces.companionId, input.claim.companionId),
+      );
+      await tx
+        .update(knownPlaces)
+        .set({ firstVisitedAt: next.currentTime, updatedAt: committedAt })
+        .where(and(visitedPlace, isNull(knownPlaces.firstVisitedAt)));
+      await tx
+        .update(knownPlaces)
+        .set({
+          status: "visited",
+          lastVisitedAt: next.currentTime,
+          visitCount: sql`${knownPlaces.visitCount} + 1`,
+          familiarity: sql`LEAST(1.0::real, ${knownPlaces.familiarity} + 0.03::real)`,
+          updatedAt: committedAt,
+        })
+        .where(visitedPlace);
+    }
+
     if (input.result.stateChanges.length > 0) {
       await tx.insert(stateChanges).values(
         input.result.stateChanges.map((change) => ({
@@ -520,6 +674,73 @@ export async function commitWorldTick(input: {
           correlationId: input.claim.correlationId,
         })),
       );
+    }
+
+    if (input.worldEvent) {
+      const event = input.worldEvent;
+      const [insertedEvent] = await tx
+        .insert(worldEvents)
+        .values({
+          id: event.id,
+          companionId: input.claim.companionId,
+          type: event.type,
+          realityLayer: event.realityLayer,
+          title: event.title,
+          content: event.description,
+          occurredAt: event.occurredAt,
+          locationId: event.locationId,
+          causeType: event.causeType,
+          causeId: event.causeId,
+          moodImpactJson: event.emotionalImpact,
+          emotionalImpactJson: event.emotionalImpact,
+          characterIdsJson: event.characterIds,
+          consequencesJson: event.consequences,
+          importance: event.importance,
+          sharePotential: event.sharePotential,
+          randomSeed: event.randomSeed,
+          idempotencyKey: event.idempotencyKey,
+          correlationId: input.claim.correlationId,
+          expiresAt: event.expiresAt,
+        })
+        .onConflictDoNothing({
+          target: [worldEvents.companionId, worldEvents.idempotencyKey],
+        })
+        .returning({ id: worldEvents.id });
+      if (!insertedEvent) {
+        throw new WorldStateConflictError("World event idempotency key was already committed");
+      }
+
+      if (event.characterIds.length > 0) {
+        await tx
+          .update(worldCharacters)
+          .set({
+            lastInteractionAt: event.occurredAt,
+            relationshipScore: sql`LEAST(1, ${worldCharacters.relationshipScore} + 0.005)`,
+            updatedAt: committedAt,
+          })
+          .where(
+            and(
+              eq(worldCharacters.companionId, input.claim.companionId),
+              inArray(worldCharacters.id, event.characterIds),
+            ),
+          );
+      }
+
+      await tx.insert(events).values({
+        companionId: input.claim.companionId,
+        type: "world.event",
+        source: "world.engine",
+        correlationId: input.claim.correlationId,
+        payloadJson: {
+          worldEventId: event.id,
+          idempotencyKey: event.idempotencyKey,
+          causeType: event.causeType,
+          causeId: event.causeId,
+          locationId: event.locationId,
+          characterIds: event.characterIds,
+          consequences: event.consequences,
+        },
+      });
     }
 
     await tx.insert(events).values({
@@ -547,6 +768,7 @@ export async function commitWorldTick(input: {
           stateVersion: next.version,
           stateChangeCount: input.result.stateChanges.length,
           scheduleTransitionCount: input.result.scheduleTransitions.length,
+          worldEventId: input.worldEvent?.id ?? null,
         },
         lastError: null,
         leaseExpiresAt: null,

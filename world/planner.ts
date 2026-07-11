@@ -97,9 +97,9 @@ function optionalBlock(dayType: "workday" | "weekend", seed: string): BlockTempl
         ]
       : [
           template("在家玩游戏和看书", "leisure", 780, 1050, "home", 0.9, 0.9, "routine"),
-          template("去书店或咖啡店", "exploration", 780, 1050, "optional", 0.7, 0.7),
-          template("城市散步", "exploration", 780, 1050, "optional", 0.75, 0.65),
-          template("见朋友", "social", 780, 1050, "optional", 0.6, 0.45),
+          template("去书店或咖啡店", "exploration", 810, 1050, "optional", 0.7, 0.7),
+          template("城市散步", "exploration", 810, 1050, "optional", 0.75, 0.65),
+          template("见朋友", "social", 810, 1050, "optional", 0.6, 0.45),
         ];
   return seededChoice(choices, seed) ?? choices[0]!;
 }
@@ -141,7 +141,10 @@ function weekendTemplates(seed: string): BlockTemplate[] {
     template("睡觉", "sleep", 0, 570, "home", 0.15, 0.05, "routine"),
     template("晚起床和早餐", "meal", 570, 630, "home", 0.75, 0.8, "routine"),
     template("慢慢收拾房间", "leisure", 630, 720, "home", 0.9, 0.9, "routine"),
-    template("午饭", "meal", 720, 780, "home", 0.8, 0.85, "routine"),
+    template("午饭", "meal", 720, goingOut ? 750 : 780, "home", 0.8, 0.85, "routine"),
+    ...(goingOut
+      ? [template("出门去下午活动地点", "commute", 750, 810, "transit", 0.4, 0.35, "routine")]
+      : []),
     afternoon,
     template(goingOut ? "回家" : "晚饭前休息", goingOut ? "commute" : "leisure", 1050, 1080, goingOut ? "transit" : "home", 0.4, 0.4, "routine"),
     template("晚饭", "meal", 1080, 1140, "home", 0.8, 0.85, "routine"),
