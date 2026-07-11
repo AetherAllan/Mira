@@ -43,3 +43,21 @@ test("a next-time place recommendation remains a suggestion, not a forced plan",
   assert.ok(signals.some((item) => item.type === "place_recommendation"));
   assert.ok(signals.some((item) => item.type === "mira_suggestion"));
 });
+
+test("technical advice is not mistaken for a Beijing place recommendation", () => {
+  for (const text of [
+    "建议你可以使用 Postgres 做持久化",
+    "你可以试试这个模型，效果不错",
+    "推荐你采用更简单的缓存方案",
+  ]) {
+    assert.equal(
+      inferWorldSignals(text).some((item) => item.type === "place_recommendation"),
+      false,
+      text,
+    );
+  }
+  const recommendation = inferWorldSignals("你下次可以去后海走走").find(
+    (item) => item.type === "place_recommendation",
+  );
+  assert.equal(recommendation?.subject, "后海");
+});

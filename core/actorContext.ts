@@ -19,6 +19,7 @@ import {
 import { zonedDateKey } from "@/lib/time";
 import { buildTemporalContext, zonedDateTime } from "@/platform/time";
 import { catchUpCompanionWorld } from "@/world/tick";
+import { rankExternalInformation } from "@/core/externalRelevance";
 
 export async function buildActorGroundedContext(input: {
   companionId: string;
@@ -27,6 +28,8 @@ export async function buildActorGroundedContext(input: {
   currentMessageId?: string;
   shareCandidateId?: string;
   memories: SelectedMemory[];
+  relevanceText?: string;
+  relevantTopics?: string[];
   now?: Date;
 }): Promise<ActorGroundedContext> {
   const now = input.now ?? new Date();
@@ -56,7 +59,7 @@ export async function buildActorGroundedContext(input: {
         .from(worldEvents)
         .where(eq(worldEvents.companionId, input.companionId))
         .orderBy(desc(worldEvents.occurredAt))
-        .limit(8),
+        .limit(32),
       db
         .select()
         .from(externalInformation)
@@ -121,7 +124,12 @@ export async function buildActorGroundedContext(input: {
     causeType: event.causeType,
     causeId: event.causeId,
   }));
-  const externalFacts = infoRows.map((info) => ({
+  const selectedInfoRows = rankExternalInformation(infoRows, {
+    queryText: input.relevanceText,
+    topics: input.relevantTopics,
+    now,
+  }).slice(0, 8);
+  const externalFacts = selectedInfoRows.map((info) => ({
     id: info.id,
     sourceName: info.sourceName,
     sourceUrl: info.sourceUrl,

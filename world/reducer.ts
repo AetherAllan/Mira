@@ -95,6 +95,13 @@ function activityDelta(type: ScheduleBlockType | undefined, hours: number) {
   };
 }
 
+function lonelinessBaseline(type: ScheduleBlockType | undefined) {
+  if (type === "social") return 0.03;
+  if (type === "work") return 0.1;
+  if (type === "sleep") return 0.12;
+  return 0.2;
+}
+
 function nextStatus(block: ScheduleBlock, at: Date): ScheduleBlock["status"] {
   if (block.status === "cancelled" || block.status === "completed") return block.status;
   if (block.endAt.getTime() <= at.getTime()) return "completed";
@@ -156,7 +163,7 @@ export function reduceWorldTick(input: WorldTickInput): WorldTickResult {
     curiosity: decayToward(input.state.curiosity, 0.55, 0.02, hours),
     loneliness: decayToward(
       input.state.loneliness,
-      0,
+      lonelinessBaseline(active?.type),
       active?.type === "social" ? 0.14 : 0.015,
       hours,
     ),
@@ -194,7 +201,7 @@ function reduceAggregateDecay(state: WorldState, until: Date, correlationId: str
     energy: decayToward(state.energy, 0.55, 0.035, hours),
     boredom: decayToward(state.boredom, 0.2, 0.035, hours),
     curiosity: decayToward(state.curiosity, 0.55, 0.02, hours),
-    loneliness: decayToward(state.loneliness, 0, 0.015, hours),
+    loneliness: decayToward(state.loneliness, 0.16, 0.015, hours),
     irritation: decayToward(state.irritation, 0, 0.08, hours),
     disappointment: decayToward(state.disappointment, 0, 0.04, hours),
     shareDesire: decayToward(state.shareDesire, 0.35, 0.05, hours),

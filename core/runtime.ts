@@ -623,6 +623,8 @@ async function processTelegramMessage(
     state: context.state,
     currentMessageId: userMessage.row.id,
     memories: selectedMemories,
+    relevanceText: message.text,
+    relevantTopics: analyzed.analysis.topics.map((topic) => topic.name),
   });
   const acted = await runActor({
     config,
@@ -924,6 +926,8 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     state: context.state,
     shareCandidateId: candidate.id,
     memories: selectedMemories,
+    relevanceText: candidate.contentSummary,
+    relevantTopics: [candidate.sourceType],
     now,
   });
   const acted = await runActor({

@@ -21,6 +21,17 @@ export interface ShareEvaluation {
   blockedBy: string[];
 }
 
+export function shouldSuppressCandidate(
+  existing: Pick<ShareCandidate, "priority" | "eventImportance">,
+  incoming: Pick<ShareCandidate, "priority" | "eventImportance">,
+) {
+  if (incoming.priority < existing.priority) return true;
+  return (
+    incoming.priority === existing.priority &&
+    incoming.eventImportance > existing.eventImportance
+  );
+}
+
 function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));

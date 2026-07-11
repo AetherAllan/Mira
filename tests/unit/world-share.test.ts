@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { scoreShareCandidate } from "@/world/share";
+import { scoreShareCandidate, shouldSuppressCandidate } from "@/world/share";
 
 const candidate = {
   emotionalIntensity: 0.8,
@@ -66,4 +66,28 @@ test("low-value candidates remain pending", () => {
 
   assert.equal(result.shouldShare, false);
   assert.ok(result.blockedBy.includes("below_threshold"));
+});
+
+test("a newer equal-priority event cannot suppress a more important candidate", () => {
+  assert.equal(
+    shouldSuppressCandidate(
+      { priority: 60, eventImportance: 0.9 },
+      { priority: 60, eventImportance: 0.5 },
+    ),
+    false,
+  );
+  assert.equal(
+    shouldSuppressCandidate(
+      { priority: 60, eventImportance: 0.4 },
+      { priority: 60, eventImportance: 0.7 },
+    ),
+    true,
+  );
+  assert.equal(
+    shouldSuppressCandidate(
+      { priority: 80, eventImportance: 0.9 },
+      { priority: 20, eventImportance: 0.2 },
+    ),
+    true,
+  );
 });

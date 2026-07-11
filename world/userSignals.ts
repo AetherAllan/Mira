@@ -26,9 +26,17 @@ export function inferWorldSignals(text: string, now = new Date()): WorldSignal[]
   if (!content) return [];
   const signals: WorldSignal[] = [];
 
-  const placeMatch = /(?:推荐你|建议你|你(?:下次|周末|下班后|有空时|哪天)?可以|你要不要)(?:下次|周末|下班后|有空时|哪天)?(?:去|试试|看看|逛逛)?[「“\s]*([^，。！？!?]{2,28})/.exec(content);
-  if (placeMatch?.[1]) {
-    signals.push(signal("place_recommendation", placeMatch[1].trim(), content, 0.76));
+  const placeMatch = /(?:推荐你|建议你)(?:下次|周末|下班后|有空时|哪天)?(?:可以)?(?:去|试试|看看|逛逛)[「“\s]*([^，。！？!?]{2,28})|你(?:下次|周末|下班后|有空时|哪天)?(?:可以|要不要)(?:去|试试|看看|逛逛)[「“\s]*([^，。！？!?]{2,28})/u.exec(content);
+  const place = (placeMatch?.[1] ?? placeMatch?.[2])
+    ?.trim()
+    .replace(/[」”吧呀啊]+$/u, "")
+    .replace(/(?:走走|逛逛|看看|试试)$/u, "")
+    .trim();
+  const looksTechnical = place
+    ? /(?:使用|采用|实现|代码|数据库|API|模型|框架|功能|方案|项目|算法|部署|配置|修复)/iu.test(place)
+    : false;
+  if (place && !looksTechnical) {
+    signals.push(signal("place_recommendation", place, content, 0.8));
   }
 
   if (/(?:我会|我明天|我之后|我回头|我晚点|明天我).*(?:告诉你|跟你说|回复你|发给你|给你结果)/.test(content)) {

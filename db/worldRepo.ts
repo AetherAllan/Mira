@@ -9,6 +9,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   or,
   sql,
@@ -778,7 +779,13 @@ export async function commitWorldTick(input: {
             and(
               eq(shareCandidates.companionId, input.claim.companionId),
               eq(shareCandidates.status, "pending"),
-              gte(shareCandidates.priority, candidate.priority),
+              or(
+                gt(shareCandidates.priority, candidate.priority),
+                and(
+                  eq(shareCandidates.priority, candidate.priority),
+                  lt(shareCandidates.eventImportance, candidate.eventImportance),
+                ),
+              ),
               lte(shareCandidates.createdAt, candidate.createdAt),
             ),
           );

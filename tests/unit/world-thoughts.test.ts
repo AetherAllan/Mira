@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildThoughtAndShareCandidate } from "@/world/thoughts";
+import { scoreShareCandidate } from "@/world/share";
 import type { WorldEvent } from "@/world/types";
 
 const event: WorldEvent = {
@@ -33,6 +34,20 @@ test("a persisted consequential event creates a replayable thought and share can
   assert.equal(first.candidate.sourceId, first.thought.id);
   assert.match(first.candidate.contentSummary, /公园计划/);
   assert.equal(first.candidate.status, "pending");
+  assert.match(first.thought.content, /临时改变之后会遇到什么/);
+  const evaluation = scoreShareCandidate(first.candidate, {
+    currentShareDesire: 0.5,
+    eventImportance: first.candidate.eventImportance,
+    relationshipTrust: 0.22,
+    miraIrritation: 0,
+    quietHours: false,
+    userLikelyBusy: false,
+    hasUnansweredProactive: false,
+    dailySentCount: 0,
+    hoursSinceLastProactive: 12,
+  });
+  assert.ok(evaluation.score >= 0.62);
+  assert.equal(evaluation.shouldShare, true);
 });
 
 test("low-value routine details do not create thought spam", () => {

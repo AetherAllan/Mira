@@ -62,6 +62,29 @@ test("world tick advances schedule and applies reasoned natural decay", () => {
   assert.ok(result.stateChanges.every((change) => change.reason.length > 0));
 });
 
+test("loneliness does not drift toward zero while Mira is alone", () => {
+  const windowStart = new Date("2026-07-10T11:00:00.000Z"); // 19:00 Beijing.
+  const windowEnd = new Date("2026-07-10T11:15:00.000Z");
+  const schedule = buildDailySchedule({
+    companionId: "mira",
+    date: windowStart,
+    homeLocationId: "home",
+    workLocationId: "studio",
+    seed: "alone-loneliness-fixture",
+  });
+  const result = reduceWorldTick({
+    state: { ...initialState(windowStart), loneliness: 0.05 },
+    schedule,
+    windowStart,
+    windowEnd,
+  });
+  assert.ok(result.state.loneliness > 0.05);
+  assert.match(
+    result.stateChanges.find((change) => change.targetPath === "loneliness")?.reason ?? "",
+    /natural decay/,
+  );
+});
+
 test("world tick is deterministic for the same persisted input", () => {
   const windowStart = new Date("2026-07-10T02:00:00.000Z");
   const windowEnd = new Date("2026-07-10T02:15:00.000Z");

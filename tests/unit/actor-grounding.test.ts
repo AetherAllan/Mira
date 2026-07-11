@@ -77,3 +77,30 @@ test("external facts and personal world facts use separate reference sets", () =
   }), context);
   assert.deepEqual(result.reasons, ["invalid_external_ref:event-1"]);
 });
+
+test("grounding catches physical paraphrases without rejecting future intent", () => {
+  for (const message of [
+    "我刚从书店出来，手里还拿着一杯咖啡。",
+    "这会儿在书店门口等雨停。",
+    "刚坐完地铁，已经下班了。",
+  ]) {
+    const result = validateActorGrounding(
+      output({ message, factClaims: [], groundingRefs: [] }),
+      context,
+    );
+    assert.ok(result.reasons.includes("physical_experience_claim_is_ungrounded"), message);
+  }
+
+  for (const message of [
+    "我想去书店，但还没决定。",
+    "如果我下午去了书店，应该会待很久。",
+    "我在想这场雨什么时候停。",
+    "我现在不太想去人多的地方。",
+  ]) {
+    const result = validateActorGrounding(
+      output({ message, factClaims: [], groundingRefs: [] }),
+      context,
+    );
+    assert.equal(result.valid, true, message);
+  }
+});
