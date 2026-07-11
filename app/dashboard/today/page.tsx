@@ -22,7 +22,7 @@ export default async function TodayPage() {
       <div className="grid gap-3 md:grid-cols-3">
         <Panel title="北京时间" description="Asia/Shanghai 与世界 tick 同步。"><div className="flex items-center gap-3"><Clock3 className="size-5 text-cyan-300" /><span className="font-mono text-xl text-zinc-100">{time(data.currentTime)}</span></div><p className="mt-2 text-xs text-zinc-600">{data.localDate}</p></Panel>
         <Panel title="当前位置" description="只展示已持久化地点，不根据台词猜测。"><div className="flex items-start gap-3"><MapPin className="mt-0.5 size-5 text-violet-300" /><div><p className="text-sm text-zinc-100">{data.currentPlace?.name ?? "位置未确认"}</p><p className="mt-1 text-xs text-zinc-600">{data.currentPlace?.district ?? "—"}</p></div></div></Panel>
-        <Panel title="当前活动" description="来自今天的 ScheduleBlock。"><div className="flex items-start gap-3"><CalendarDays className="mt-0.5 size-5 text-amber-300" /><div><p className="text-sm text-zinc-100">{data.currentBlock?.title ?? "暂无活动块"}</p>{data.currentBlock ? <Badge className="mt-2 text-amber-300">{data.currentBlock.status}</Badge> : null}</div></div></Panel>
+        <Panel title="当前活动" description="只在世界状态 30 分钟内有推进时展示。"><div className="flex items-start gap-3"><CalendarDays className="mt-0.5 size-5 text-amber-300" /><div><p className="text-sm text-zinc-100">{data.currentBlock?.title ?? (data.debug.worldHealth.worldStateFresh ? "暂无活动块" : "世界状态待同步")}</p>{data.currentBlock ? <Badge className="mt-2 text-amber-300">{data.currentBlock.status}</Badge> : null}</div></div></Panel>
       </div>
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.3fr_.7fr]">
         <Panel title="今日时间表" description="计划、变化和完成状态共享同一条时间轴。">

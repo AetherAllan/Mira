@@ -5,9 +5,23 @@ import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
 
 function grounded(): ActorGroundedContext {
   return {
-    currentTime: "2026-07-11T10:00:00.000Z",
+    temporal: {
+      timeZone: "Asia/Shanghai",
+      observedAtUtc: "2026-07-11T10:00:00.000Z",
+      localDateTime: "2026-07-11T18:00:00+08:00",
+      localDate: "2026-07-11",
+      localTime: "18:00:00",
+      weekday: "Saturday",
+      dayPeriod: "evening",
+      utcOffset: "+08:00",
+      worldAdvancedThroughUtc: "2026-07-11T10:00:00.000Z",
+      worldAdvancedThroughLocal: "2026-07-11T18:00:00+08:00",
+      worldLagSeconds: 0,
+      worldStateFresh: true,
+    },
     currentLocation: { id: "place-1", name: "某书店", category: "bookstore" },
     currentActivity: null,
+    lastConfirmedActivity: null,
     schedule: [],
     emotionReasons: {},
     workingMemory: { recentSummary: "working summary" },

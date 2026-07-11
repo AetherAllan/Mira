@@ -8,17 +8,29 @@ import type {
   SelectedMemory,
 } from "@/core/types";
 import type { LlmUsageContext } from "@/db/usageRepo";
+import type { TemporalContext } from "@/platform/time";
 
 export interface ActorGroundedContext {
-  currentTime: string;
+  temporal: TemporalContext;
   currentLocation: { id: string; name: string; category: string } | null;
-  currentActivity: { id: string; title: string; type: string; startAt: string; endAt: string } | null;
+  currentActivity: {
+    id: string;
+    title: string;
+    type: string;
+    startAtUtc: string;
+    startAtLocal: string;
+    endAtUtc: string;
+    endAtLocal: string;
+  } | null;
+  lastConfirmedActivity: { id: string; title: string; type: string } | null;
   schedule: Array<{
     id: string;
     title: string;
     type: string;
-    startAt: string;
-    endAt: string;
+    startAtUtc: string;
+    startAtLocal: string;
+    endAtUtc: string;
+    endAtLocal: string;
     locationId: string | null;
     status: string;
     changeReason: string | null;
@@ -69,9 +81,13 @@ function render(input: ActorPromptInput, context: ActorGroundedContext | null) {
     `Beliefs: ${JSON.stringify(character.beliefs)}`,
     `Profile: ${JSON.stringify(character.profile)}`,
     "2. Current Beijing time:",
-    context?.currentTime ?? "not loaded",
+    JSON.stringify(context?.temporal ?? "not loaded"),
     "3. Current grounded location and activity:",
-    JSON.stringify({ location: context?.currentLocation ?? null, activity: context?.currentActivity ?? null }),
+    JSON.stringify({
+      location: context?.currentLocation ?? null,
+      currentActivity: context?.currentActivity ?? null,
+      lastConfirmedActivity: context?.lastConfirmedActivity ?? null,
+    }),
     "4. Current schedule (database facts only):",
     JSON.stringify(context?.schedule ?? []),
     "5. Current emotion and concrete reasons:",

@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 export default async function WorldDebugPage() {
   const { debug } = await loadWorldDashboardData();
   const sections = [
+    ["WorldHealth", debug.worldHealth, "时钟新鲜度、cron、今日日程和当前活动一致性。"],
     ["WorldState", debug.worldState, "当前权威世界状态与版本。"],
     ["Schedule", debug.schedule, "日程来源、状态、地点与变更原因。"],
     ["Characters", debug.characters, "稳定虚构配角与关系状态。"],

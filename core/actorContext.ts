@@ -17,6 +17,8 @@ import {
   listRelevantOpenLoops,
 } from "@/db/interactionRepo";
 import { zonedDateKey } from "@/lib/time";
+import { buildTemporalContext, zonedDateTime } from "@/platform/time";
+import { catchUpCompanionWorld } from "@/world/tick";
 
 export async function buildActorGroundedContext(input: {
   companionId: string;
@@ -30,6 +32,14 @@ export async function buildActorGroundedContext(input: {
   const now = input.now ?? new Date();
   const localDate = zonedDateKey(now, input.config.character.profile.timeZone);
   const db = getDb();
+  const [initialWorld] = await db
+    .select({ lastWorldTickAt: worldStates.lastWorldTickAt })
+    .from(worldStates)
+    .where(eq(worldStates.companionId, input.companionId))
+    .limit(1);
+  if (initialWorld && now.getTime() - initialWorld.lastWorldTickAt.getTime() > 30 * 60_000) {
+    await catchUpCompanionWorld(input.companionId, now).catch(() => null);
+  }
   const [worldRows, places, schedule, workingMemory, openLoops, eventRows, infoRows, recentRows, candidateRows] =
     await Promise.all([
       db.select().from(worldStates).where(eq(worldStates.companionId, input.companionId)).limit(1),
@@ -73,7 +83,7 @@ export async function buildActorGroundedContext(input: {
             input.currentMessageId ? ne(messages.id, input.currentMessageId) : undefined,
           ),
         )
-        .orderBy(desc(messages.createdAt))
+        .orderBy(desc(messages.createdAt), desc(messages.id))
         .limit(24),
       input.shareCandidateId
         ? db
@@ -92,7 +102,13 @@ export async function buildActorGroundedContext(input: {
   if (!world) throw new Error("Actor grounding requires a persistent world state");
   const placeById = new Map(places.map((place) => [place.id, place]));
   const currentPlace = world.currentLocationId ? placeById.get(world.currentLocationId) : undefined;
-  const currentActivity = schedule.find((block) => block.id === world.currentScheduleBlockId);
+  const temporal = buildTemporalContext({
+    observedAt: now,
+    worldAdvancedThrough: world.lastWorldTickAt,
+    timeZone: input.config.character.profile.timeZone,
+  });
+  const confirmedActivity = schedule.find((block) => block.id === world.currentScheduleBlockId);
+  const currentActivity = temporal.worldStateFresh ? confirmedActivity : undefined;
   const worldFacts = eventRows.reverse().map((event) => ({
     id: event.id,
     realityLayer: event.realityLayer,
@@ -126,7 +142,7 @@ export async function buildActorGroundedContext(input: {
   if (currentPlace) allowedReferenceIds.add(currentPlace.id);
 
   return {
-    currentTime: now.toISOString(),
+    temporal,
     currentLocation: currentPlace
       ? { id: currentPlace.id, name: currentPlace.name, category: currentPlace.category }
       : null,
@@ -135,16 +151,24 @@ export async function buildActorGroundedContext(input: {
           id: currentActivity.id,
           title: currentActivity.title,
           type: currentActivity.type,
-          startAt: currentActivity.startAt.toISOString(),
-          endAt: currentActivity.endAt.toISOString(),
+          startAtUtc: currentActivity.startAt.toISOString(),
+          startAtLocal: zonedDateTime(currentActivity.startAt, temporal.timeZone),
+          endAtUtc: currentActivity.endAt.toISOString(),
+          endAtLocal: zonedDateTime(currentActivity.endAt, temporal.timeZone),
         }
       : null,
+    lastConfirmedActivity:
+      !temporal.worldStateFresh && confirmedActivity
+        ? { id: confirmedActivity.id, title: confirmedActivity.title, type: confirmedActivity.type }
+        : null,
     schedule: schedule.map((block) => ({
       id: block.id,
       title: block.title,
       type: block.type,
-      startAt: block.startAt.toISOString(),
-      endAt: block.endAt.toISOString(),
+      startAtUtc: block.startAt.toISOString(),
+      startAtLocal: zonedDateTime(block.startAt, temporal.timeZone),
+      endAtUtc: block.endAt.toISOString(),
+      endAtLocal: zonedDateTime(block.endAt, temporal.timeZone),
       locationId: block.locationId,
       status: block.status,
       changeReason: block.changeReason,

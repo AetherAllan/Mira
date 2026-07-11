@@ -16,6 +16,7 @@ import {
   worldTickRuns,
 } from "@/db/schema";
 import { zonedDateKey } from "@/lib/time";
+import { getWorldHealth } from "@/world/health";
 
 function publicEmotion(world: Awaited<ReturnType<typeof ensureCompanionContext>>["world"]["state"]) {
   const descriptions: string[] = [];
@@ -33,7 +34,7 @@ export async function loadWorldDashboardData() {
   const timeZone = context.companion.configJson.character.profile.timeZone;
   const localDate = zonedDateKey(new Date(), timeZone);
   const db = getDb();
-  const [schedule, events, loops, thoughts, candidates, awaiting, external, ticks, snapshots, changes, usage] =
+  const [schedule, events, loops, thoughts, candidates, awaiting, external, ticks, snapshots, changes, usage, health] =
     await Promise.all([
       db.select().from(scheduleBlocks).where(eq(scheduleBlocks.companionId, companionId)).orderBy(asc(scheduleBlocks.startAt)).limit(40),
       db.select().from(worldEvents).where(eq(worldEvents.companionId, companionId)).orderBy(desc(worldEvents.occurredAt)).limit(100),
@@ -46,11 +47,13 @@ export async function loadWorldDashboardData() {
       db.select().from(promptContextSnapshots).where(eq(promptContextSnapshots.companionId, companionId)).orderBy(desc(promptContextSnapshots.createdAt)).limit(20),
       db.select().from(stateChanges).where(eq(stateChanges.companionId, companionId)).orderBy(desc(stateChanges.createdAt)).limit(100),
       db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companionId)).orderBy(desc(llmUsageLogs.createdAt)).limit(200),
+      getWorldHealth(companionId, timeZone),
     ]);
   const placeById = new Map(context.world.places.map((place) => [place.id, place]));
   const characterById = new Map(context.world.characters.map((character) => [character.id, character]));
   const todaySchedule = schedule.filter((block) => block.localDate === localDate);
-  const currentBlock = todaySchedule.find((block) => block.id === context.world.state.currentScheduleBlockId);
+  const confirmedBlock = todaySchedule.find((block) => block.id === context.world.state.currentScheduleBlockId);
+  const currentBlock = health.worldStateFresh ? confirmedBlock : undefined;
   const currentPlace = context.world.state.currentLocationId
     ? placeById.get(context.world.state.currentLocationId)
     : undefined;
@@ -74,6 +77,7 @@ export async function loadWorldDashboardData() {
       hasConsequences: event.consequencesJson.length > 0,
     })),
     debug: {
+      worldHealth: health,
       worldState: context.world.state,
       schedule,
       characters: context.world.characters,

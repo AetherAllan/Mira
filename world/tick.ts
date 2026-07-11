@@ -41,6 +41,7 @@ import type {
   WorldStateRow,
 } from "@/db/schema";
 import type { ScheduleBlock, WorldEvent } from "@/world/types";
+import { activeIntervalAt } from "@/platform/time";
 
 const ENGINE_VERSION = "world-v1";
 const TICK_MS = 15 * 60_000;
@@ -111,15 +112,7 @@ async function scheduleForDate(input: {
   };
 }
 
-function activeBlockAt(schedule: ScheduleBlock[], at: Date) {
-  const instant = at.getTime() - 1;
-  return schedule.find(
-    (block) =>
-      block.status !== "cancelled" &&
-      block.startAt.getTime() <= instant &&
-      block.endAt.getTime() > instant,
-  );
-}
+const activeBlockAt = activeIntervalAt<ScheduleBlock>;
 
 function estimatedTravelMinutes(first: KnownPlaceRow | undefined, second: KnownPlaceRow | undefined) {
   if (!first || !second) return undefined;
@@ -481,4 +474,14 @@ export async function runWorldTick(now = new Date()) {
     failedCount: results.filter((result) => result.status === "failed").length,
     results,
   };
+}
+
+export async function catchUpCompanionWorld(companionId: string, now = new Date()) {
+  const { windowEnd } = getCompletedTickWindow(now);
+  const companion = (await listWorldCompanions()).find((row) => row.id === companionId);
+  if (!companion) throw new Error("Companion not found for deterministic world catch-up");
+  // This path intentionally excludes providers, awaiting-reply processing and
+  // proactive sending. A chat request may repair stale deterministic state but
+  // must never turn into an unbounded external-I/O worker.
+  return runCompanionTick(companion, windowEnd);
 }

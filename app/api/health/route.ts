@@ -1,6 +1,11 @@
 export const dynamic = "force-dynamic";
 
-export function GET() {
+import { asc } from "drizzle-orm";
+import { getDb } from "@/db/client";
+import { companions } from "@/db/schema";
+import { getWorldHealth } from "@/world/health";
+
+export async function GET() {
   const required = [
     "API_KEY",
     "DATABASE_URL",
@@ -14,9 +19,27 @@ export function GET() {
 
   // Railway's deployment healthcheck verifies that the web process is ready.
   // Configuration readiness remains visible without exposing any secret values.
+  const companionRows = await getDb()
+    .select({ id: companions.id, configJson: companions.configJson })
+    .from(companions)
+    .orderBy(asc(companions.createdAt));
+  const worlds = await Promise.all(
+    companionRows.map((companion) =>
+      getWorldHealth(
+        companion.id,
+        companion.configJson.character.profile.timeZone,
+      ),
+    ),
+  );
+
   return Response.json({
     status: "ok",
     service: "mira",
     configured: missing.length === 0,
+    world: {
+      companionCount: worlds.length,
+      healthyCount: worlds.filter((health) => health.cronHealthy).length,
+      companions: worlds,
+    },
   });
 }
