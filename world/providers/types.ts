@@ -9,7 +9,7 @@ export interface GeoPoint {
 }
 
 export interface ProviderPlace {
-  provider: "amap";
+  provider: "google";
   providerId: string;
   name: string;
   category: string;
@@ -22,7 +22,7 @@ export interface ProviderPlace {
 export type ProviderRouteMode = "walking" | "bicycling" | "transit";
 
 export interface ProviderRoute {
-  provider: "amap";
+  provider: "google";
   mode: ProviderRouteMode;
   origin: GeoPoint;
   destination: GeoPoint;

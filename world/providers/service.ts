@@ -1,13 +1,18 @@
 import { createHash } from "node:crypto";
 import {
   getCachedProviderValue,
+  persistDiscoveredPlaces,
   persistExternalFacts,
   setCachedProviderValue,
   type ExternalFactDraft,
 } from "@/db/providerRepo";
 import { events } from "@/db/schema";
 import { getDb } from "@/db/client";
-import { AMapProvider, type AMapPoiSearch, type AMapRouteRequest } from "@/world/providers/amap";
+import {
+  GoogleMapsProvider,
+  type GooglePlaceSearch,
+  type GoogleRouteRequest,
+} from "@/world/providers/googleMaps";
 import { embedWithBgeM3 } from "@/world/providers/embedding";
 import { GdeltProvider } from "@/world/providers/gdelt";
 import { QWeatherProvider } from "@/world/providers/qweather";
@@ -56,35 +61,51 @@ async function cached<T>(input: {
 
 export async function searchBeijingPois(
   companionId: string,
-  query: AMapPoiSearch,
+  query: GooglePlaceSearch,
   now = new Date(),
 ): Promise<ProviderPlace[]> {
-  const apiKey = process.env.AMAP_WEB_API_KEY?.trim();
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
   if (!apiKey) return [];
   return cached({
     companionId,
-    provider: "amap",
+    provider: "google_maps",
     key: `poi:${cacheKey(query)}`,
     ttlMs: 7 * 24 * HOUR,
     now,
-    load: () => new AMapProvider({ apiKey }).searchPois(query),
+    load: () => new GoogleMapsProvider({ apiKey }).searchPlaces(query),
+  });
+}
+
+export async function discoverBeijingPlaces(input: {
+  companionId: string;
+  query: GooglePlaceSearch;
+  correlationId: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const places = await searchBeijingPois(input.companionId, input.query, now);
+  return persistDiscoveredPlaces({
+    companionId: input.companionId,
+    places,
+    discoveredAt: now,
+    correlationId: input.correlationId,
   });
 }
 
 export async function getBeijingRoute(
   companionId: string,
-  request: AMapRouteRequest,
+  request: GoogleRouteRequest,
   now = new Date(),
 ): Promise<ProviderRoute | null> {
-  const apiKey = process.env.AMAP_WEB_API_KEY?.trim();
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
   if (!apiKey) return null;
   return cached({
     companionId,
-    provider: "amap",
+    provider: "google_maps",
     key: `route:${cacheKey(request)}`,
     ttlMs: 30 * MINUTE,
     now,
-    load: () => new AMapProvider({ apiKey }).getRoute(request),
+    load: () => new GoogleMapsProvider({ apiKey }).getRoute(request),
   });
 }
 
@@ -157,7 +178,14 @@ export async function ingestBeijingExternalInformation(
   const qweatherKey = process.env.QWEATHER_API_KEY?.trim();
   const qweatherHost = process.env.QWEATHER_API_HOST?.trim();
   const enabled = process.env.EXTERNAL_INGESTION_ENABLED === "true" || Boolean(qweatherKey && qweatherHost);
-  if (!enabled) return { status: "disabled" as const, inserted: 0, duplicates: 0, failures: [] as string[] };
+  if (!enabled) return {
+    status: "disabled" as const,
+    inserted: 0,
+    duplicates: 0,
+    failures: [] as string[],
+    weatherRisk: 0,
+    weatherSummary: null as string | null,
+  };
 
   const tasks: Array<Promise<ExternalFactDraft[]>> = [];
   if (qweatherKey && qweatherHost) {
@@ -214,6 +242,12 @@ export async function ingestBeijingExternalInformation(
   );
   if (embeddings) drafts.forEach((draft, index) => { draft.embedding = embeddings[index]; });
   const persisted = await persistExternalFacts({ companionId, drafts, fetchedAt: now, correlationId });
+  const weatherFacts = drafts.filter((draft) => draft.category.startsWith("weather"));
+  const weatherRisk = weatherFacts.some((draft) => draft.category === "weather_warning")
+    ? 1
+    : weatherFacts.some((draft) => /雨|雪|雷|大风|沙尘/.test(`${draft.title}${draft.factualSummary}`))
+      ? 0.75
+      : 0;
 
   await getDb().insert(events).values({
     companionId,
@@ -222,5 +256,11 @@ export async function ingestBeijingExternalInformation(
     correlationId,
     payloadJson: { ...persisted, failures, candidateCount: drafts.length },
   });
-  return { status: "completed" as const, ...persisted, failures };
+  return {
+    status: "completed" as const,
+    ...persisted,
+    failures,
+    weatherRisk,
+    weatherSummary: weatherFacts[0]?.factualSummary ?? null,
+  };
 }

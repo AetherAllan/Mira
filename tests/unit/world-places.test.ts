@@ -7,8 +7,8 @@ function place(overrides: Partial<KnownPlace> = {}): KnownPlace {
   return {
     id: "place-1",
     companionId: "mira",
-    canonicalKey: "amap:B001",
-    provider: "amap",
+    canonicalKey: "google:B001",
+    provider: "google",
     providerPoiId: "B001",
     status: "known",
     coordinateSystem: "gcj02",
@@ -30,7 +30,7 @@ test("place dedupe prioritizes provider POI identity", () => {
   const match = findCanonicalPlace(
     {
       companionId: "mira",
-      provider: "amap",
+      provider: "google",
       providerPoiId: "B001",
       name: "供应商改过的名字",
       latitude: 40.1,

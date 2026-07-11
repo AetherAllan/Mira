@@ -3,6 +3,8 @@ import type { ProviderFetch } from "@/world/providers/types";
 export interface FetchJsonOptions {
   fetcher?: ProviderFetch;
   headers?: HeadersInit;
+  method?: "GET" | "POST";
+  body?: string;
   timeoutMs?: number;
   retryDelayMs?: number;
 }
@@ -26,6 +28,8 @@ export async function fetchJson(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetcher(url, {
       headers: options.headers,
+      method: options.method,
+      body: options.body,
       signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
     });
 
@@ -45,7 +49,8 @@ export async function fetchJson(
       continue;
     }
 
-    // Deliberately omit the request URL: AMap credentials live in its query string.
+    // Deliberately omit the request URL. Provider credentials may live in a
+    // query string today or after a future adapter change.
     throw new ProviderHttpError(response.status);
   }
 

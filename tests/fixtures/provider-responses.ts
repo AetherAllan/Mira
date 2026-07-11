@@ -1,28 +1,21 @@
-export const AMAP_POI_RESPONSE = {
-  status: "1",
-  info: "OK",
-  pois: [{
-    id: "B000A7BD6C",
-    name: "三联韬奋书店",
-    type: "购物服务;文化用品店;书店",
-    adname: "东城区",
-    address: "美术馆东街22号",
-    location: "116.410886,39.923124",
-    distance: "840",
+export const GOOGLE_PLACES_RESPONSE = {
+  places: [{
+    id: "ChIJbeijingbookstore",
+    displayName: { text: "三联韬奋书店", languageCode: "zh-CN" },
+    formattedAddress: "北京市东城区美术馆东街22号",
+    location: { latitude: 39.923124, longitude: 116.410886 },
+    primaryType: "book_store",
   }],
 };
 
-export const AMAP_TRANSIT_RESPONSE = {
-  status: "1",
-  info: "OK",
-  route: {
-    origin: "116.30,40.08",
-    destination: "116.47,39.99",
-    transits: [{
-      distance: "18750",
-      cost: { duration: "2700", transit_fee: "5" },
-    }],
-  },
+export const GOOGLE_ROUTES_RESPONSE = {
+  routes: [{
+    distanceMeters: 18_750,
+    duration: "2700s",
+    travelAdvisory: {
+      transitFare: { currencyCode: "CNY", units: "5", nanos: 0 },
+    },
+  }],
 };
 
 export const QWEATHER_CURRENT_RESPONSE = {
