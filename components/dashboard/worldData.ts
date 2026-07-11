@@ -15,8 +15,9 @@ import {
   worldEvents,
   worldTickRuns,
 } from "@/db/schema";
-import { zonedDateKey } from "@/lib/time";
+import { localDateAt, systemClock } from "@/platform/time";
 import { getWorldHealth } from "@/world/health";
+import { buildTodayWorldView } from "@/world/todayView";
 
 function publicEmotion(world: Awaited<ReturnType<typeof ensureCompanionContext>>["world"]["state"]) {
   const descriptions: string[] = [];
@@ -28,11 +29,11 @@ function publicEmotion(world: Awaited<ReturnType<typeof ensureCompanionContext>>
   return descriptions.length ? descriptions : ["状态平稳，没有明显情绪波动"];
 }
 
-export async function loadWorldDashboardData() {
+export async function loadWorldDashboardData(now = systemClock.now()) {
   const context = await ensureCompanionContext();
   const companionId = context.companion.id;
   const timeZone = context.companion.configJson.character.profile.timeZone;
-  const localDate = zonedDateKey(new Date(), timeZone);
+  const localDate = localDateAt(now, timeZone);
   const db = getDb();
   const [schedule, events, loops, thoughts, candidates, awaiting, external, ticks, snapshots, changes, usage, health] =
     await Promise.all([
@@ -47,22 +48,28 @@ export async function loadWorldDashboardData() {
       db.select().from(promptContextSnapshots).where(eq(promptContextSnapshots.companionId, companionId)).orderBy(desc(promptContextSnapshots.createdAt)).limit(20),
       db.select().from(stateChanges).where(eq(stateChanges.companionId, companionId)).orderBy(desc(stateChanges.createdAt)).limit(100),
       db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companionId)).orderBy(desc(llmUsageLogs.createdAt)).limit(200),
-      getWorldHealth(companionId, timeZone),
+      getWorldHealth(companionId, timeZone, now),
     ]);
   const placeById = new Map(context.world.places.map((place) => [place.id, place]));
   const characterById = new Map(context.world.characters.map((character) => [character.id, character]));
   const todaySchedule = schedule.filter((block) => block.localDate === localDate);
-  const confirmedBlock = todaySchedule.find((block) => block.id === context.world.state.currentScheduleBlockId);
-  const currentBlock = health.worldStateFresh ? confirmedBlock : undefined;
-  const currentPlace = context.world.state.currentLocationId
-    ? placeById.get(context.world.state.currentLocationId)
-    : undefined;
+  const today = buildTodayWorldView({
+    observedAt: now,
+    timeZone,
+    lastWorldTickAt: context.world.state.lastWorldTickAt,
+    currentScheduleBlockId: context.world.state.currentScheduleBlockId,
+    currentLocationId: context.world.state.currentLocationId,
+    schedule: todaySchedule,
+    places: context.world.places,
+    health,
+  });
   return {
     companion: context.companion,
-    currentTime: new Date(),
+    temporal: today.temporal,
     localDate,
-    currentPlace: currentPlace ?? null,
-    currentBlock: currentBlock ?? null,
+    currentPlace: today.currentPlace,
+    lastConfirmedPlace: today.lastConfirmedPlace,
+    currentBlock: today.currentBlock,
     publicEmotion: publicEmotion(context.world.state),
     schedule: todaySchedule,
     places: context.world.places,

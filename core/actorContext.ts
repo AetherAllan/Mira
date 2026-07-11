@@ -16,8 +16,7 @@ import {
   getConversationWorkingMemory,
   listRelevantOpenLoops,
 } from "@/db/interactionRepo";
-import { zonedDateKey } from "@/lib/time";
-import { buildTemporalContext, zonedDateTime } from "@/platform/time";
+import { buildTemporalContext, localDateAt, systemClock, zonedDateTime } from "@/platform/time";
 import { catchUpCompanionWorld } from "@/world/tick";
 import { rankExternalInformation } from "@/core/externalRelevance";
 
@@ -32,8 +31,9 @@ export async function buildActorGroundedContext(input: {
   relevantTopics?: string[];
   now?: Date;
 }): Promise<ActorGroundedContext> {
-  const now = input.now ?? new Date();
-  const localDate = zonedDateKey(now, input.config.character.profile.timeZone);
+  const now = input.now ?? systemClock.now();
+  const timeZone = input.config.character.profile.timeZone;
+  const localDate = localDateAt(now, timeZone);
   const db = getDb();
   const [initialWorld] = await db
     .select({ lastWorldTickAt: worldStates.lastWorldTickAt })
@@ -108,7 +108,7 @@ export async function buildActorGroundedContext(input: {
   const temporal = buildTemporalContext({
     observedAt: now,
     worldAdvancedThrough: world.lastWorldTickAt,
-    timeZone: input.config.character.profile.timeZone,
+    timeZone,
   });
   const confirmedActivity = schedule.find((block) => block.id === world.currentScheduleBlockId);
   const currentActivity = temporal.worldStateFresh ? confirmedActivity : undefined;
@@ -161,9 +161,11 @@ export async function buildActorGroundedContext(input: {
           title: currentActivity.title,
           type: currentActivity.type,
           startAtUtc: currentActivity.startAt.toISOString(),
-          startAtLocal: zonedDateTime(currentActivity.startAt, temporal.timeZone),
+          startLocal: zonedDateTime(currentActivity.startAt, temporal.timeZone),
           endAtUtc: currentActivity.endAt.toISOString(),
-          endAtLocal: zonedDateTime(currentActivity.endAt, temporal.timeZone),
+          endLocal: zonedDateTime(currentActivity.endAt, temporal.timeZone),
+          localDate: currentActivity.localDate,
+          timeZone: temporal.timeZone,
         }
       : null,
     lastConfirmedActivity:
@@ -175,9 +177,11 @@ export async function buildActorGroundedContext(input: {
       title: block.title,
       type: block.type,
       startAtUtc: block.startAt.toISOString(),
-      startAtLocal: zonedDateTime(block.startAt, temporal.timeZone),
+      startLocal: zonedDateTime(block.startAt, temporal.timeZone),
       endAtUtc: block.endAt.toISOString(),
-      endAtLocal: zonedDateTime(block.endAt, temporal.timeZone),
+      endLocal: zonedDateTime(block.endAt, temporal.timeZone),
+      localDate: block.localDate,
+      timeZone: temporal.timeZone,
       locationId: block.locationId,
       status: block.status,
       changeReason: block.changeReason,

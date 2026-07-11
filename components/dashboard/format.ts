@@ -1,4 +1,5 @@
 import type { DateValue } from "@/components/dashboard/data";
+import { formatZonedTimestamp } from "@/platform/time";
 
 const keyLabels: Record<string, string> = {
   directness: "Directness",
@@ -31,14 +32,7 @@ export function formatDate(value: DateValue | null | undefined, compact = false)
   if (!value) return "—";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    ...(compact ? {} : { year: "numeric" }),
-    hour12: false,
-  }).format(date);
+  return formatZonedTimestamp(date, "Asia/Shanghai", { includeYear: !compact });
 }
 
 export function percent(value: number) {

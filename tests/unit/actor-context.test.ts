@@ -74,3 +74,56 @@ test("Actor context keeps one current message, chronological history and token b
   const ids = result.context?.recentMessages.map((message) => Number(message.id.split("-")[1]));
   assert.deepEqual(ids, [...(ids ?? [])].sort((left, right) => left - right));
 });
+
+test("Actor prompt names Beijing wall time and renders schedule locally", () => {
+  const context = grounded();
+  context.temporal = {
+    ...context.temporal,
+    observedAtUtc: "2026-07-11T08:00:00.000Z",
+    localDateTime: "2026-07-11T16:00:00+08:00",
+    localTime: "16:00:00",
+    worldAdvancedThroughUtc: "2026-07-11T07:45:00.000Z",
+    worldAdvancedThroughLocal: "2026-07-11T15:45:00+08:00",
+    worldLagSeconds: 900,
+  };
+  context.schedule = [{
+    id: "afternoon-work",
+    title: "下午工作",
+    type: "work",
+    startAtUtc: "2026-07-11T05:00:00.000Z",
+    endAtUtc: "2026-07-11T10:00:00.000Z",
+    startLocal: "2026-07-11T13:00:00+08:00",
+    endLocal: "2026-07-11T18:00:00+08:00",
+    localDate: "2026-07-11",
+    timeZone: "Asia/Shanghai",
+    locationId: "place-1",
+    status: "active",
+    changeReason: null,
+  }];
+
+  const result = buildBudgetedActorPrompt({
+    config: DEFAULT_RUNTIME_CONFIG,
+    state: INITIAL_STATE,
+    plan: {
+      action: "reply",
+      mode: "quiet_observation",
+      memoryBudget: "none",
+      noveltyBudget: "none",
+      selectedSeed: null,
+      toolAllowed: false,
+      webAccess: "none",
+      styleHints: ["short"],
+      reason: "time test",
+    },
+    memories: [],
+    selectedSeed: null,
+    cooldownWarnings: [],
+    userMessage: "现在几点？",
+    groundedContext: context,
+  });
+
+  assert.match(result.prompt, /Observed Beijing time: 2026-07-11T16:00:00\+08:00/);
+  assert.doesNotMatch(result.prompt, /Observed Beijing time: .*T08:00:00/);
+  assert.match(result.prompt, /下午工作: 13:00–18:00, Asia\/Shanghai/);
+  assert.match(result.prompt, /World advanced through: 2026-07-11T15:45:00\+08:00/);
+});

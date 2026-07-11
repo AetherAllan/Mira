@@ -3,10 +3,12 @@ import { loadWorldDashboardData } from "@/components/dashboard/worldData";
 import { EmptyState, PageIntro, Panel } from "@/components/dashboard/ui";
 import { Badge } from "@/components/ui/badge";
 import { JsonInspector } from "@/components/dashboard/JsonInspector";
+import { formatZonedTimestamp } from "@/platform/time";
 
 export const dynamic = "force-dynamic";
 
-const date = (value: Date) => new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(value);
+const date = (value: Date) =>
+  formatZonedTimestamp(value, "Asia/Shanghai", { includeYear: false });
 
 export default async function TimelinePage() {
   const data = await loadWorldDashboardData();

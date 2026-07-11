@@ -11,26 +11,12 @@ export function isValidTimeZone(value: string) {
   }
 }
 
-export function zonedDateKey(date = new Date(), timeZone = "Asia/Shanghai") {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+export function zonedDateKey(date = systemClock.now(), timeZone = "Asia/Shanghai") {
+  return localDateAt(date, timeZone);
 }
 
-export function zonedMinutes(date = new Date(), timeZone = "Asia/Shanghai") {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return Number(values.hour) * 60 + Number(values.minute);
+export function zonedMinutes(date = systemClock.now(), timeZone = "Asia/Shanghai") {
+  return zonedMinutesAt(date, timeZone);
 }
 
 function parseClock(value: string) {
@@ -56,9 +42,11 @@ export function hoursSince(date: Date | string | null | undefined, now = new Dat
 
 export function formatTimestamp(value: Date | string | null | undefined) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "short",
-    timeStyle: "medium",
-    timeZone: "Asia/Shanghai",
-  }).format(new Date(value));
+  return formatZonedTimestamp(new Date(value), "Asia/Shanghai");
 }
+import {
+  formatZonedTimestamp,
+  localDateAt,
+  systemClock,
+  zonedMinutesAt,
+} from "@/platform/time";

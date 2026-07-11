@@ -1,4 +1,5 @@
 import { createWorldSeed, seededChoice } from "@/world/random";
+import { isWeekendLocalDate, localDateAt } from "@/platform/time";
 import {
   WORLD_TIME_ZONE,
   type ScheduleBlock,
@@ -39,7 +40,6 @@ interface LocalDay {
   year: number;
   month: number;
   day: number;
-  weekDay: number;
 }
 
 interface BlockTemplate {
@@ -53,31 +53,16 @@ interface BlockTemplate {
   source?: ScheduleBlockSource;
 }
 
-const beijingDayFormatter = new Intl.DateTimeFormat("en-CA", {
-  timeZone: WORLD_TIME_ZONE,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
 function getLocalDay(date: Date): LocalDay {
-  const values = Object.fromEntries(
-    beijingDayFormatter
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)]),
-  );
-  const year = values.year;
-  const month = values.month;
-  const day = values.day;
+  const key = localDateAt(date, WORLD_TIME_ZONE);
+  const [year, month, day] = key.split("-").map(Number);
   if (!year || !month || !day) throw new Error("Unable to resolve Beijing calendar day");
 
   return {
-    key: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    key,
     year,
     month,
     day,
-    weekDay: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
   };
 }
 
@@ -157,7 +142,7 @@ export function buildDailySchedule(input: DailyScheduleInput): ScheduleBlock[] {
   const day = getLocalDay(input.date);
   const seed = input.seed ?? createWorldSeed(input.companionId, day.key, "daily-plan-v1");
   const correlationId = input.correlationId?.trim() || undefined;
-  const isWeekend = day.weekDay === 0 || day.weekDay === 6;
+  const isWeekend = isWeekendLocalDate(day.key);
   const templates = isWeekend ? weekendTemplates(seed) : workdayTemplates(seed);
 
   const schedule: ScheduleBlock[] = templates.map((block, index) => ({

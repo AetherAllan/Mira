@@ -1,4 +1,5 @@
 import { WORLD_TIME_ZONE, type TripFeasibility } from "@/world/types";
+import { zonedParts } from "@/platform/time";
 
 export interface TripFeasibilityInput {
   currentLocationId?: string;
@@ -20,14 +21,7 @@ export interface TripFeasibilityInput {
 
 function beijingHour(date: Date) {
   if (!Number.isFinite(date.getTime())) return Number.NaN;
-  const hour = new Intl.DateTimeFormat("en-US", {
-    timeZone: WORLD_TIME_ZONE,
-    hour: "2-digit",
-    hourCycle: "h23",
-  })
-    .formatToParts(date)
-    .find((part) => part.type === "hour")?.value;
-  return Number(hour);
+  return Number(zonedParts(date, WORLD_TIME_ZONE).hour);
 }
 
 export function evaluateTripFeasibility(input: TripFeasibilityInput): TripFeasibility {

@@ -31,12 +31,14 @@ export async function GET() {
       ),
     ),
   );
+  const worldHealthy = worlds.length > 0 && worlds.every((health) => health.cronHealthy);
 
   return Response.json({
-    status: "ok",
+    status: missing.length === 0 && worldHealthy ? "ok" : "degraded",
     service: "mira",
     configured: missing.length === 0,
     world: {
+      status: worldHealthy ? "healthy" : "unhealthy",
       companionCount: worlds.length,
       healthyCount: worlds.filter((health) => health.cronHealthy).length,
       companions: worlds,

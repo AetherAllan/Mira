@@ -18,9 +18,11 @@ export interface ActorGroundedContext {
     title: string;
     type: string;
     startAtUtc: string;
-    startAtLocal: string;
+    startLocal: string;
     endAtUtc: string;
-    endAtLocal: string;
+    endLocal: string;
+    localDate: string;
+    timeZone: string;
   } | null;
   lastConfirmedActivity: { id: string; title: string; type: string } | null;
   schedule: Array<{
@@ -28,9 +30,11 @@ export interface ActorGroundedContext {
     title: string;
     type: string;
     startAtUtc: string;
-    startAtLocal: string;
+    startLocal: string;
     endAtUtc: string;
-    endAtLocal: string;
+    endLocal: string;
+    localDate: string;
+    timeZone: string;
     locationId: string | null;
     status: string;
     changeReason: string | null;
@@ -71,6 +75,20 @@ function estimateTokens(value: string) {
   return Math.ceil(value.length / 4);
 }
 
+function localClock(value: string) {
+  return value.slice(11, 16);
+}
+
+function renderLocalSchedule(context: ActorGroundedContext | null) {
+  if (!context?.schedule.length) return "No schedule is loaded.";
+  return context.schedule
+    .map(
+      (block) =>
+        `- ${block.title}: ${localClock(block.startLocal)}–${localClock(block.endLocal)}, ${block.timeZone} [${block.status}; id=${block.id}]`,
+    )
+    .join("\n");
+}
+
 function render(input: ActorPromptInput, context: ActorGroundedContext | null) {
   const { character } = input.config;
   const photoMode = input.plan.mode === "photo_share" || input.plan.mode === "inner_world_scene";
@@ -80,16 +98,27 @@ function render(input: ActorPromptInput, context: ActorGroundedContext | null) {
     character.identity.join("\n"),
     `Beliefs: ${JSON.stringify(character.beliefs)}`,
     `Profile: ${JSON.stringify(character.profile)}`,
-    "2. Current Beijing time:",
-    JSON.stringify(context?.temporal ?? "not loaded"),
+    "2. Current real time and persisted world time:",
+    context
+      ? [
+          `Observed Beijing time: ${context.temporal.localDateTime} (${context.temporal.weekday}, ${context.temporal.dayPeriod})`,
+          `Observed UTC evidence: ${context.temporal.observedAtUtc}`,
+          `World advanced through: ${context.temporal.worldAdvancedThroughLocal} (${context.temporal.worldAdvancedThroughUtc} UTC evidence)`,
+          `World lag: ${context.temporal.worldLagSeconds}s; fresh=${context.temporal.worldStateFresh}`,
+        ].join("\n")
+      : "Temporal context not loaded.",
     "3. Current grounded location and activity:",
     JSON.stringify({
       location: context?.currentLocation ?? null,
       currentActivity: context?.currentActivity ?? null,
       lastConfirmedActivity: context?.lastConfirmedActivity ?? null,
     }),
-    "4. Current schedule (database facts only):",
-    JSON.stringify(context?.schedule ?? []),
+    "4. Current schedule (local wall time first; database facts only):",
+    renderLocalSchedule(context),
+    "Schedule UTC debug evidence (never reinterpret as Beijing wall time):",
+    JSON.stringify(
+      context?.schedule.map(({ id, startAtUtc, endAtUtc }) => ({ id, startAtUtc, endAtUtc })) ?? [],
+    ),
     "5. Current emotion and concrete reasons:",
     JSON.stringify({ mood: input.state.mood, reasons: context?.emotionReasons ?? {} }),
     "6. Relationship summary:",

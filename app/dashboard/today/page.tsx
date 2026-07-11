@@ -2,26 +2,22 @@ import { CalendarDays, Clock3, MapPin } from "lucide-react";
 import { loadWorldDashboardData } from "@/components/dashboard/worldData";
 import { EmptyState, PageIntro, Panel } from "@/components/dashboard/ui";
 import { Badge } from "@/components/ui/badge";
+import { localTimeAt } from "@/platform/time";
 
 export const dynamic = "force-dynamic";
 
-const time = (value: Date) => new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai",
-  hour: "2-digit",
-  minute: "2-digit",
-  hourCycle: "h23",
-}).format(value);
-
 export default async function TodayPage() {
   const data = await loadWorldDashboardData();
+  const timeZone = data.temporal.timeZone;
+  const time = (value: Date) => localTimeAt(value, timeZone, false);
   const completed = data.schedule.filter((block) => block.status === "completed");
   const changed = data.schedule.filter((block) => ["changed", "cancelled", "delayed"].includes(block.status));
   return (
     <>
       <PageIntro title="Today / Beijing" description="公开生活视图：现在在哪里、正在做什么、今天怎么安排。内部浮点状态留在 World Debug。" />
       <div className="grid gap-3 md:grid-cols-3">
-        <Panel title="北京时间" description="Asia/Shanghai 与世界 tick 同步。"><div className="flex items-center gap-3"><Clock3 className="size-5 text-cyan-300" /><span className="font-mono text-xl text-zinc-100">{time(data.currentTime)}</span></div><p className="mt-2 text-xs text-zinc-600">{data.localDate}</p></Panel>
-        <Panel title="当前位置" description="只展示已持久化地点，不根据台词猜测。"><div className="flex items-start gap-3"><MapPin className="mt-0.5 size-5 text-violet-300" /><div><p className="text-sm text-zinc-100">{data.currentPlace?.name ?? "位置未确认"}</p><p className="mt-1 text-xs text-zinc-600">{data.currentPlace?.district ?? "—"}</p></div></div></Panel>
+        <Panel title="北京时间" description="真实时钟与世界推进时间分开显示。"><div className="flex items-center gap-3"><Clock3 className="size-5 text-cyan-300" /><span className="font-mono text-xl text-zinc-100">{data.temporal.localTime.slice(0, 5)}</span></div><p className="mt-2 text-xs text-zinc-600">{data.localDate} · 世界推进至 {data.temporal.worldAdvancedThroughLocal.slice(11, 16)} · 延迟 {data.temporal.worldLagSeconds}s</p></Panel>
+        <Panel title="当前位置" description="世界状态过期时不把旧地点冒充当前位置。"><div className="flex items-start gap-3"><MapPin className="mt-0.5 size-5 text-violet-300" /><div><p className="text-sm text-zinc-100">{data.currentPlace?.name ?? "位置未确认"}</p><p className="mt-1 text-xs text-zinc-600">{data.currentPlace?.district ?? (data.lastConfirmedPlace ? `上次确认：${data.lastConfirmedPlace.name}` : "—")}</p></div></div></Panel>
         <Panel title="当前活动" description="只在世界状态 30 分钟内有推进时展示。"><div className="flex items-start gap-3"><CalendarDays className="mt-0.5 size-5 text-amber-300" /><div><p className="text-sm text-zinc-100">{data.currentBlock?.title ?? (data.debug.worldHealth.worldStateFresh ? "暂无活动块" : "世界状态待同步")}</p>{data.currentBlock ? <Badge className="mt-2 text-amber-300">{data.currentBlock.status}</Badge> : null}</div></div></Panel>
       </div>
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.3fr_.7fr]">

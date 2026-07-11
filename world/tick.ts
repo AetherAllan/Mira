@@ -42,6 +42,7 @@ import type {
 } from "@/db/schema";
 import type { ScheduleBlock, WorldEvent } from "@/world/types";
 import { activeIntervalAt } from "@/platform/time";
+import { optionalPlaceOriginRole } from "@/world/placeOrigin";
 
 const ENGINE_VERSION = "world-v1";
 const TICK_MS = 15 * 60_000;
@@ -68,10 +69,9 @@ function profileOrDefault(value: CharacterProfile | undefined) {
 }
 
 function selectOptionalPlace(places: KnownPlaceRow[], companionId: string, localDate: string) {
-  const weekDay = new Date(`${localDate}T00:00:00+08:00`).getUTCDay();
-  const isWeekend = weekDay === 0 || weekDay === 6;
+  const originRole = optionalPlaceOriginRole(localDate);
   const origin = places.find(
-    (place) => place.metadataJson.placeRole === (isWeekend ? "home" : "work"),
+    (place) => place.metadataJson.placeRole === originRole,
   );
   const candidates = places.filter(
     (place) =>

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { systemClock } from "@/platform/time";
 import type {
   ActionPlan,
   CompanionState,
@@ -8,7 +9,6 @@ import type {
 } from "@/core/types";
 import {
   bootstrapCompanion,
-  applyDailyReflectionTransaction,
   claimMessageProcessing,
   completeMessageProcessing,
   countTodayToolCalls,
@@ -26,7 +26,6 @@ import {
   listEnabledSeeds,
   listRecentAnnotations,
   listRecentMessages,
-  listTodayActivity,
   renewMessageProcessing,
   updateProactiveLog,
   useMemories,
@@ -38,7 +37,6 @@ import {
 } from "@/db/messageOutboxRepo";
 import { applyUserWorldSignals } from "@/db/interactionRepo";
 import { persistWebCitations } from "@/db/providerRepo";
-import { applyLongTermReflectionEvolution } from "@/db/reflectionRepo";
 import { listActiveSharedKnowledge } from "@/db/interactionRepo";
 import {
   hasWaitingProactiveReply,
@@ -62,14 +60,13 @@ import {
   computeTopicEntropy,
 } from "@/core/metrics";
 import { runActor } from "@/core/runtime/actorRunner";
-import { hoursSince, isQuietHours, zonedDateKey } from "@/lib/time";
+import { getPrimaryRuntimeContext } from "@/core/runtime/context";
+import { hoursSince, isQuietHours } from "@/lib/time";
 import { analyzeMessage } from "@/psyche/analyzer";
 import { directAction } from "@/psyche/egoDirector";
 import {
-  applyDailyReflection,
   applyInteractionGrowth,
   applyProactiveGrowth,
-  reflectOnDay,
   type StateChangeDraft,
 } from "@/psyche/growthEngine";
 import { assessDrives } from "@/psyche/idDrive";
@@ -84,6 +81,8 @@ import { scoreShareCandidate } from "@/world/share";
 import { createSeededRandom, createWorldSeed } from "@/world/random";
 import type { TelegramTextMessage } from "@/telegram/webhook";
 import { TOOL_REGISTRY, type ToolExecution } from "@/tools/registry";
+
+export { runDailyReflection } from "@/core/runtime/dailyReflection";
 
 type RuntimeContext = NonNullable<Awaited<ReturnType<typeof getRuntimeContext>>>;
 type RecentMessage = Awaited<ReturnType<typeof listRecentMessages>>[number];
@@ -625,15 +624,6 @@ async function processTelegramMessage(
   };
 }
 
-async function primaryContext(): Promise<RuntimeContext> {
-  const telegramUserId = process.env.TELEGRAM_ALLOWED_USER_ID;
-  if (!telegramUserId) throw new Error("TELEGRAM_ALLOWED_USER_ID is not configured");
-  return (
-    (await getRuntimeContext(telegramUserId)) ??
-    (await bootstrapCompanion({ telegramUserId, displayName: "Telegram User" }))
-  );
-}
-
 async function writeProactiveLog(
   context: RuntimeContext,
   input: {
@@ -674,7 +664,7 @@ type ProactiveRunResult = {
 
 let hourlyRun: Promise<ProactiveRunResult> | null = null;
 
-export async function runHourlyProactive(now = new Date()): Promise<ProactiveRunResult> {
+export async function runHourlyProactive(now = systemClock.now()): Promise<ProactiveRunResult> {
   if (hourlyRun) return { sent: false, reason: "already_running" };
   hourlyRun = runCandidateHourlyProactiveOnce(now);
   try {
@@ -685,7 +675,7 @@ export async function runHourlyProactive(now = new Date()): Promise<ProactiveRun
 }
 
 async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
-  const context = await primaryContext();
+  const context = await getPrimaryRuntimeContext();
   const config = runtimeConfig(context);
   const timeZone = config.policy.quietHours.timeZone;
   const windowStart = new Date(now);
@@ -955,125 +945,4 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     ).catch(() => false);
     throw error;
   }
-}
-
-export async function runDailyReflection(now = new Date()) {
-  const context = await primaryContext();
-  const config = runtimeConfig(context);
-  const date = zonedDateKey(now, config.policy.quietHours.timeZone);
-  const correlationId = randomUUID();
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "system.tick",
-    source: "cron.daily",
-    correlationId,
-    payloadJson: { at: now.toISOString(), date },
-  });
-  const activity = await listTodayActivity(
-    context.companion.id,
-    date,
-    config.policy.quietHours.timeZone,
-  );
-  const reflectionActivity = {
-    ...activity,
-    knownPlaces: context.world.places.map((place) => ({
-      id: place.id,
-      name: place.name,
-      familiarity: place.familiarity,
-      visitCount: place.visitCount,
-      lastVisitedAt: place.lastVisitedAt,
-    })),
-    fictionalCharacters: context.world.characters.map((character) => ({
-      stableKey: character.stableKey,
-      name: character.name,
-      relationshipScore: character.relationshipScore,
-      currentSituation: character.currentSituation,
-    })),
-  };
-  const generated = await reflectOnDay(
-    reflectionActivity,
-    context.state,
-    config,
-    {
-      companionId: context.companion.id,
-      correlationId,
-      category: "reflection",
-      metadata: { date },
-    },
-    new Date(`${date}T12:00:00+08:00`).getUTCDay() === 0,
-  );
-  let growth: ReturnType<typeof applyDailyReflection> | null = null;
-  let journalResult: Awaited<ReturnType<typeof applyDailyReflectionTransaction>> | null = null;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const latestState = await getCompanionState(context.companion.id);
-    growth = applyDailyReflection(latestState, generated.reflection);
-    // Neon HTTP cannot keep a callback transaction open. The repository commits
-    // journal, state, audit rows and tomorrow seeds in one PostgreSQL statement.
-    journalResult = await applyDailyReflectionTransaction({
-      journalInput: {
-        companionId: context.companion.id,
-        date,
-        summary: generated.reflection.summary,
-        reflection: generated.reflection.reflection,
-        traitUpdatesJson: generated.reflection.traitUpdates,
-        beliefUpdatesJson: {},
-        arcUpdatesJson: generated.reflection.arcUpdates,
-        relationshipSummary: generated.reflection.relationshipSummary,
-        placePreferenceUpdatesJson: generated.reflection.placePreferenceUpdates,
-        interestUpdatesJson: generated.reflection.interestUpdates,
-        characterUpdatesJson: generated.reflection.characterUpdates,
-        weeklySummary: generated.reflection.weeklySummary,
-        correlationId,
-        sourceType: "daily_reflection",
-      },
-      expectedState: latestState,
-      state: growth.state,
-      changes: growth.changes,
-      seeds: generated.reflection.tomorrowSeeds,
-      userId: context.user.id,
-      eventPayload: {
-        usedFallback: generated.usedFallback,
-        error: generated.error,
-        raw: generated.raw,
-      },
-    });
-    if (!journalResult.conflict) break;
-  }
-  if (!growth || !journalResult || journalResult.conflict || !journalResult.row) {
-    throw new Error("Companion state changed too often during daily reflection");
-  }
-  const evolution = await applyLongTermReflectionEvolution({
-    companionId: context.companion.id,
-    journalId: journalResult.row.id,
-    reflection: generated.reflection,
-    correlationId,
-    now,
-  });
-  if (!journalResult.created) {
-    return {
-      reflected: false,
-      reason: "already_reflected",
-      date,
-      journalId: journalResult.row.id,
-      evolution,
-    };
-  }
-  if (generated.reflection.tomorrowSeeds.length) {
-    await logRuntimeEvent({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      type: "world.seed.created",
-      source: "growth",
-      payloadJson: { journalId: journalResult.row.id, seeds: generated.reflection.tomorrowSeeds },
-    });
-  }
-  return {
-    reflected: true,
-    date,
-    journalId: journalResult.row.id,
-    stateChanges: growth.changes.length,
-    tomorrowSeeds: generated.reflection.tomorrowSeeds.length,
-    evolution,
-  };
 }

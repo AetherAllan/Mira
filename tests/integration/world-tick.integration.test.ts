@@ -186,11 +186,11 @@ test(
           correlationId: "00000000-0000-4000-8000-000000000108",
           category: "reflection",
         },
-        model: "fixture/model",
+        model: "fixture/model:free",
         promptTokens: 120,
         completionTokens: 30,
         totalTokens: 150,
-        costUsd: 0.001,
+        costUsd: 0,
         latencyMs: 42,
         usedFallback: false,
       });
@@ -403,6 +403,10 @@ test(
         weatherRisk: 0.8,
         weatherSummary: rainFact.factualSummary,
       })).adjusted, false);
+      // This isolated weather fixture is not a complete daily schedule. Remove
+      // it before the world-tick scenario so the planner can create the real
+      // continuous day and the catch-up assertion tests production behavior.
+      await db.delete(scheduleBlocks).where(eq(scheduleBlocks.id, outdoorPlan.id));
 
       const [candidate] = await db
         .insert(shareCandidates)
@@ -477,6 +481,12 @@ test(
       });
       assert.equal(actorContext.recentMessages.some((item) => item.id === message.id), false);
       assert.ok(actorContext.schedule.length > 0);
+      assert.equal(actorContext.temporal.worldStateFresh, true);
+      assert.equal(actorContext.currentActivity?.id, state.currentScheduleBlockId);
+      assert.equal(
+        actorContext.schedule.filter((block) => block.status === "active").length,
+        1,
+      );
       const budgeted = buildBudgetedActorPrompt({
         config: DEFAULT_RUNTIME_CONFIG,
         state: INITIAL_STATE,
