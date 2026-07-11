@@ -1,4 +1,5 @@
 import type { CompanionState, RuntimeConfig } from "@/core/types";
+import { resolveFreeChatModel } from "@/llm/models";
 import { DEFAULT_CHARACTER_PROFILE } from "@/seed/world";
 
 export const INITIAL_STATE: CompanionState = {
@@ -107,5 +108,5 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
     memoryWriteThreshold: 0.55,
     toolDailyLimit: 3,
   },
-  model: process.env.MODEL ?? "openai/gpt-4.1-mini",
+  model: resolveFreeChatModel(process.env.MODEL),
 };

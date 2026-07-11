@@ -1,3 +1,5 @@
+import { resolveFreeChatModel } from "@/llm/models";
+
 function required(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured`);
@@ -8,7 +10,7 @@ export function getLlmConfig() {
   return {
     baseUrl: (process.env.BASE_URL?.trim() || "https://openrouter.ai/api/v1").replace(/\/$/, ""),
     apiKey: required("API_KEY"),
-    model: process.env.MODEL?.trim() || "openai/gpt-4.1-mini",
+    model: resolveFreeChatModel(process.env.MODEL),
   };
 }
 

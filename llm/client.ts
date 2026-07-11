@@ -1,5 +1,6 @@
 import { parseJsonObject, type JsonObject } from "@/llm/json";
 import { recordLlmUsage, type LlmUsageContext } from "@/db/usageRepo";
+import { DEFAULT_CHAT_MODEL, resolveFreeChatModel } from "@/llm/models";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -53,14 +54,16 @@ export async function callJson<T>({
   messages,
   fallback,
   validate,
-  model = process.env.MODEL ?? "openai/gpt-4.1-mini",
+  model = DEFAULT_CHAT_MODEL,
   temperature = 0.4,
   maxTokens = 900,
   webSearch = false,
   usageContext,
 }: JsonCallOptions<T>): Promise<JsonCallResult<T>> {
   const startedAt = Date.now();
-  const selectedModel = process.env.MODEL?.trim() || model;
+  const selectedModel = resolveFreeChatModel(process.env.MODEL?.trim() || model);
+  const webSearchEnabled =
+    webSearch && process.env.OPENROUTER_WEB_SEARCH_ENABLED?.trim() === "true";
   const finish = async (
     result: JsonCallResult<T>,
     usage?: ChatCompletionResponse["usage"],
@@ -105,7 +108,7 @@ export async function callJson<T>({
         response_format: { type: "json_object" },
         // ponytail: Nemotron defaults to thinking; effort none kills the latency tax
         reasoning: { effort: "none" },
-        ...(webSearch
+        ...(webSearchEnabled
           ? {
               tools: [{
                 type: "openrouter:web_search",

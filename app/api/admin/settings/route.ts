@@ -40,7 +40,10 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ companion: updated, config: updated?.configJson });
   } catch (error) {
-    if (error instanceof Error && error.message === "Invalid time zone") {
+    if (
+      error instanceof Error &&
+      ["Invalid time zone", "Model must end with :free"].includes(error.message)
+    ) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     console.error("Failed to update admin settings", error);

@@ -1,12 +1,12 @@
 import { asArray, asObject, asNumber } from "@/world/providers/http";
 import { recordLlmUsage, type LlmUsageContext } from "@/db/usageRepo";
+import { DEFAULT_EMBEDDING_MODEL } from "@/llm/models";
 
 interface EmbeddingResponse {
   data?: Array<{ index?: number; embedding?: number[] }>;
   usage?: { prompt_tokens?: number; total_tokens?: number; cost?: number };
 }
 
-const EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free";
 const EMBEDDING_DIMENSIONS = 1024;
 
 export async function embedExternalInformation(
@@ -14,7 +14,7 @@ export async function embedExternalInformation(
   usageContext?: LlmUsageContext,
 ): Promise<number[][] | null> {
   const startedAt = Date.now();
-  const model = EMBEDDING_MODEL;
+  const model = DEFAULT_EMBEDDING_MODEL;
   const log = (input: { usage?: EmbeddingResponse["usage"]; usedFallback: boolean; error?: string }) => {
     if (!usageContext) return Promise.resolve();
     return recordLlmUsage({

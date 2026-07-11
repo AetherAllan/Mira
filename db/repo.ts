@@ -46,6 +46,7 @@ import {
 import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
 import { DEFAULT_SEED_CARDS } from "@/seed/seedCards";
 import { isValidTimeZone } from "@/lib/time";
+import { requireFreeModel } from "@/llm/models";
 import { createSeededRandom, createWorldSeed } from "@/world/random";
 
 type NewMessage = Omit<typeof messages.$inferInsert, "id" | "createdAt">;
@@ -1436,7 +1437,9 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
       ),
     },
     model:
-      typeof patch.model === "string" && patch.model.trim() ? patch.model.trim() : current.model,
+      typeof patch.model === "string" && patch.model.trim()
+        ? requireFreeModel(patch.model)
+        : current.model,
   };
 
   const rows = await getDb()
