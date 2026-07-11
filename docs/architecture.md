@@ -50,6 +50,12 @@ Indexes isolate by `companionId`; time/status scans have compound indexes. Idemp
 
 The seed is SHA-256 over companion, window, engine version and purpose. A worker with an expired token cannot complete a newer claim. Gaps up to seven days replay schedule boundaries; longer gaps use aggregate decay and do not invent hundreds of routine events.
 
+## Time and freshness
+
+PostgreSQL timestamps remain UTC. `platform/time` is the single wall-clock conversion boundary and produces a `TemporalContext` with both UTC evidence and `Asia/Shanghai` calendar fields. Actor schedule blocks carry `startAtUtc/startLocal` and `endAtUtc/endLocal`; the current user message sees Beijing local time once, never a UTC timestamp mislabeled as Beijing.
+
+Schedule intervals are half-open: `startAt <= now < endAt`. World state is fresh for 30 minutes. Before an Actor context is built, stale state gets a deterministic provider-free catch-up; if catch-up fails, the prompt exposes `lastConfirmedActivity` rather than claiming it is current. `/api/health` and World Debug publish schedule existence, lag, latest tick status, block consistency and cron health.
+
 ## Schedule, places and weather
 
 Weekday/weekend templates provide routine. Open loops and recent facts can propose adjustments; a seeded optional block provides bounded variation. Every change records `source`, `changeReason` and `correlationId`.
@@ -82,6 +88,8 @@ AwaitingReply distinguishes ordinary chat, explicit questions, vulnerable disclo
 The Actor context order is identity, time, current place/activity, schedule, caused emotions, relationship, working memory, open loops, memories, recent world events, selected external/place facts, share candidate, chronological recent messages and the current message. The current message ID is excluded from history.
 
 Actor JSON separates `world`, `external` and `opinion` claims. World claims must reference selected schedule/event/place IDs. Non-null proposed mutations, missing sources, conflicting time claims or invented visits cause one retry; a second failure uses a deterministic grounded fallback. Prompt snapshots contain selected IDs, budget and hashes, never API keys.
+
+Time facts use `temporal:observed`. Deterministic fallbacks answer time and current-location questions from this reference and persisted place/schedule IDs instead of echoing the user or inventing an experience.
 
 ## Outbox semantics
 
