@@ -107,8 +107,8 @@ test(
       const discovered = {
         companionId: companion.id,
         places: [{
-          provider: "google" as const,
-          providerId: `google-fixture-${suffix}`,
+          provider: "osm" as const,
+          providerId: `osm-fixture-${suffix}`,
           name: "集成测试书店",
           category: "book_store",
           district: "朝阳区",
@@ -121,7 +121,7 @@ test(
       };
       assert.equal((await persistDiscoveredPlaces(discovered)).inserted, 1);
       assert.equal((await persistDiscoveredPlaces(discovered)).inserted, 0);
-      const [googlePlace] = await db
+      const [osmPlace] = await db
         .select()
         .from(knownPlaces)
         .where(
@@ -130,8 +130,8 @@ test(
             eq(knownPlaces.providerPoiId, discovered.places[0].providerId),
           ),
         );
-      assert.equal(googlePlace?.provider, "google");
-      assert.equal(googlePlace?.coordinateSystem, "wgs84");
+      assert.equal(osmPlace?.provider, "osm");
+      assert.equal(osmPlace?.coordinateSystem, "wgs84");
       const [journal] = await db.insert(internalJournals).values({
         companionId: companion.id,
         date: "2026-07-09",
@@ -353,7 +353,7 @@ test(
         .values({
           companionId: companion.id,
           idempotencyKey: `integration-weather:${suffix}`,
-          sourceName: "QWeather fixture",
+          sourceName: "Open-Meteo fixture",
           title: "北京降雨",
           factualSummary: "北京傍晚持续降雨。",
           category: "weather",

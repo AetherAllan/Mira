@@ -8,22 +8,17 @@ import {
 } from "@/db/providerRepo";
 import { events } from "@/db/schema";
 import { getDb } from "@/db/client";
-import {
-  GoogleMapsProvider,
-  type GooglePlaceSearch,
-  type GoogleRouteRequest,
-} from "@/world/providers/googleMaps";
 import { embedExternalInformation } from "@/world/providers/embedding";
 import { GdeltProvider } from "@/world/providers/gdelt";
 import { OpenMeteoProvider } from "@/world/providers/openMeteo";
 import { NominatimProvider, OsrmProvider } from "@/world/providers/publicGeo";
-import { QWeatherProvider } from "@/world/providers/qweather";
 import type {
+  PlaceSearchRequest,
   ProviderArticle,
   ProviderCurrentWeather,
   ProviderPlace,
   ProviderRoute,
-  ProviderWeatherAlert,
+  RouteRequest,
 } from "@/world/providers/types";
 
 const BEIJING = { longitude: 116.4074, latitude: 39.9042 };
@@ -63,21 +58,9 @@ async function cached<T>(input: {
 
 export async function searchBeijingPois(
   companionId: string,
-  query: GooglePlaceSearch,
+  query: PlaceSearchRequest,
   now = new Date(),
 ): Promise<ProviderPlace[]> {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
-  if (apiKey) {
-    const google = await cached({
-      companionId,
-      provider: "google_maps",
-      key: `poi:${cacheKey(query)}`,
-      ttlMs: 7 * 24 * HOUR,
-      now,
-      load: () => new GoogleMapsProvider({ apiKey }).searchPlaces(query),
-    }).catch(() => null);
-    if (google) return google;
-  }
   return cached({
     companionId,
     provider: "nominatim",
@@ -90,7 +73,7 @@ export async function searchBeijingPois(
 
 export async function discoverBeijingPlaces(input: {
   companionId: string;
-  query: GooglePlaceSearch;
+  query: PlaceSearchRequest;
   correlationId: string;
   now?: Date;
 }) {
@@ -106,21 +89,9 @@ export async function discoverBeijingPlaces(input: {
 
 export async function getBeijingRoute(
   companionId: string,
-  request: GoogleRouteRequest,
+  request: RouteRequest,
   now = new Date(),
 ): Promise<ProviderRoute | null> {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
-  if (apiKey) {
-    const google = await cached({
-      companionId,
-      provider: "google_maps",
-      key: `route:${cacheKey(request)}`,
-      ttlMs: 30 * MINUTE,
-      now,
-      load: () => new GoogleMapsProvider({ apiKey }).getRoute(request),
-    }).catch(() => null);
-    if (google) return google;
-  }
   if (request.mode === "transit") return null;
   return cached({
     companionId,
@@ -135,7 +106,7 @@ export async function getBeijingRoute(
 function weatherDraft(weather: ProviderCurrentWeather, now: Date): ExternalFactDraft {
   const summary = `北京当前${weather.condition}，气温${weather.temperatureC ?? "未知"}℃，降水${weather.precipitationMm ?? "未知"}毫米。`;
   return {
-    sourceName: weather.provider === "qweather" ? "QWeather" : "Open-Meteo",
+    sourceName: "Open-Meteo",
     sourceUrl: weather.sourceUrl ?? undefined,
     title: `北京实时天气：${weather.condition}`,
     factualSummary: summary,
@@ -147,22 +118,6 @@ function weatherDraft(weather: ProviderCurrentWeather, now: Date): ExternalFactD
     reliability: 0.92,
     novelty: 0.55,
     expiresAt: new Date(now.getTime() + 2 * HOUR),
-  };
-}
-
-function alertDraft(alert: ProviderWeatherAlert, now: Date): ExternalFactDraft {
-  return {
-    sourceName: alert.senderName ?? "QWeather",
-    title: alert.headline,
-    factualSummary: alert.description?.slice(0, 1_000) || alert.headline,
-    category: "weather_warning",
-    facts: { ...alert },
-    publishedAt: alert.issuedAt ? new Date(alert.issuedAt) : now,
-    beijingRelevance: 1,
-    personalRelevance: 1,
-    reliability: 0.94,
-    novelty: 0.9,
-    expiresAt: alert.expiresAt ? new Date(alert.expiresAt) : new Date(now.getTime() + 12 * HOUR),
   };
 }
 
@@ -198,9 +153,7 @@ export async function ingestBeijingExternalInformation(
   correlationId: string,
   now = new Date(),
 ) {
-  const qweatherKey = process.env.QWEATHER_API_KEY?.trim();
-  const qweatherHost = process.env.QWEATHER_API_HOST?.trim();
-  const enabled = process.env.EXTERNAL_INGESTION_ENABLED === "true" || Boolean(qweatherKey && qweatherHost);
+  const enabled = process.env.EXTERNAL_INGESTION_ENABLED !== "false";
   if (!enabled) return {
     status: "disabled" as const,
     inserted: 0,
@@ -219,32 +172,7 @@ export async function ingestBeijingExternalInformation(
     now,
     load: () => new OpenMeteoProvider().getCurrent(BEIJING),
   });
-  if (qweatherKey && qweatherHost) {
-    const weather = new QWeatherProvider({ apiKey: qweatherKey, apiHost: qweatherHost });
-    tasks.push(
-      cached({
-        companionId,
-        provider: "qweather",
-        key: "current:beijing",
-        ttlMs: 30 * MINUTE,
-        now,
-        load: () => weather.getCurrent(BEIJING),
-      }).then((value) => [weatherDraft(value, now)]),
-      cached({
-        companionId,
-        provider: "qweather",
-        key: "alerts:beijing",
-        ttlMs: 30 * MINUTE,
-        now,
-        load: () => weather.getAlerts(BEIJING),
-      }).then((values) => values.map((value) => alertDraft(value, now))),
-    );
-    // A bad paid-provider response is isolated by allSettled. Public weather
-    // remains a separate low-cost fallback fact and rule-based dedupe keeps one.
-    tasks.push(publicWeather().then((value) => [weatherDraft(value, now)]));
-  } else {
-    tasks.push(publicWeather().then((value) => [weatherDraft(value, now)]));
-  }
+  tasks.push(publicWeather().then((value) => [weatherDraft(value, now)]));
   tasks.push(
     cached({
       companionId,

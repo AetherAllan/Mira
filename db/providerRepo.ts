@@ -94,11 +94,11 @@ function knownPlaceDomain(row: typeof knownPlaces.$inferSelect): KnownPlace {
 }
 
 /**
- * Persist only the small, selected result set returned by Google Places. The
+ * Persist only the small, selected result set returned by Nominatim. The
  * provider call has already completed before this transaction, so a slow map
  * request can never hold database locks. Provider IDs handle the normal retry
  * path; normalized name plus nearby coordinates prevents a manual seed and a
- * Google result from becoming two physical places.
+ * provider result from becoming two physical places.
  */
 export async function persistDiscoveredPlaces(input: {
   companionId: string;
@@ -184,7 +184,7 @@ export async function persistDiscoveredPlaces(input: {
       await tx.insert(events).values({
         companionId: input.companionId,
         type: "place.discovered",
-        source: "google_maps",
+        source: "nominatim",
         correlationId: input.correlationId,
         payloadJson: { inserted, placeIds: insertedPlaceIds },
       });

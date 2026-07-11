@@ -9,7 +9,7 @@ export interface GeoPoint {
 }
 
 export interface ProviderPlace {
-  provider: "google" | "osm";
+  provider: "osm";
   providerId: string;
   name: string;
   category: string;
@@ -21,8 +21,21 @@ export interface ProviderPlace {
 
 export type ProviderRouteMode = "walking" | "bicycling" | "transit";
 
+export interface PlaceSearchRequest {
+  textQuery: string;
+  locationBias?: GeoPoint;
+  radiusMeters?: number;
+  maxResults?: number;
+}
+
+export interface RouteRequest {
+  origin: GeoPoint;
+  destination: GeoPoint;
+  mode: ProviderRouteMode;
+}
+
 export interface ProviderRoute {
-  provider: "google" | "osm";
+  provider: "osm";
   mode: ProviderRouteMode;
   origin: GeoPoint;
   destination: GeoPoint;
@@ -32,7 +45,7 @@ export interface ProviderRoute {
 }
 
 export interface ProviderCurrentWeather {
-  provider: "qweather" | "open_meteo";
+  provider: "open_meteo";
   observedAt: string | null;
   updatedAt: string | null;
   condition: string;
@@ -45,37 +58,6 @@ export interface ProviderCurrentWeather {
   windScale: string | null;
   windSpeedKph: number | null;
   sourceUrl: string | null;
-  attributions: string[];
-}
-
-export interface ProviderDailyForecast {
-  provider: "qweather";
-  forecastDate: string;
-  conditionDay: string;
-  conditionNight: string;
-  temperatureMinC: number | null;
-  temperatureMaxC: number | null;
-  precipitationMm: number | null;
-  humidityPercent: number | null;
-  sunrise: string | null;
-  sunset: string | null;
-  sourceUrl: string | null;
-  attributions: string[];
-}
-
-export interface ProviderWeatherAlert {
-  provider: "qweather";
-  providerId: string;
-  senderName: string | null;
-  eventName: string;
-  headline: string;
-  description: string | null;
-  severity: string | null;
-  urgency: string | null;
-  certainty: string | null;
-  issuedAt: string | null;
-  effectiveAt: string | null;
-  expiresAt: string | null;
   attributions: string[];
 }
 

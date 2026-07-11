@@ -2,10 +2,11 @@ import { asArray, asNumber, asObject, asString, fetchJson } from "@/world/provid
 import type {
   ProviderFetch,
   ProviderPlace,
+  PlaceSearchRequest,
   ProviderRoute,
   ProviderRouteMode,
+  RouteRequest,
 } from "@/world/providers/types";
-import type { GooglePlaceSearch, GoogleRouteRequest } from "@/world/providers/googleMaps";
 
 const USER_AGENT = "Mira/0.1 (https://mira-production-61c4.up.railway.app)";
 let publicMapQueue = Promise.resolve();
@@ -25,7 +26,7 @@ function rateLimited<T>(request: () => Promise<T>) {
 export class NominatimProvider {
   constructor(private readonly fetcher?: ProviderFetch) {}
 
-  searchPlaces(search: GooglePlaceSearch): Promise<ProviderPlace[]> {
+  searchPlaces(search: PlaceSearchRequest): Promise<ProviderPlace[]> {
     const query = search.textQuery.trim();
     if (!query) throw new Error("Nominatim query is required");
     const params = new URLSearchParams({
@@ -69,7 +70,7 @@ export class NominatimProvider {
 export class OsrmProvider {
   constructor(private readonly fetcher?: ProviderFetch) {}
 
-  async getRoute(request: GoogleRouteRequest): Promise<ProviderRoute> {
+  async getRoute(request: RouteRequest): Promise<ProviderRoute> {
     const mode = request.mode;
     if (mode === "transit") throw new Error("Public OSRM does not provide transit routes");
     const profile: Record<Exclude<ProviderRouteMode, "transit">, string> = {

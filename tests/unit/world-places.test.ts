@@ -7,8 +7,8 @@ function place(overrides: Partial<KnownPlace> = {}): KnownPlace {
   return {
     id: "place-1",
     companionId: "mira",
-    canonicalKey: "google:B001",
-    provider: "google",
+    canonicalKey: "osm:B001",
+    provider: "osm",
     providerPoiId: "B001",
     status: "known",
     coordinateSystem: "gcj02",
@@ -30,7 +30,7 @@ test("place dedupe prioritizes provider POI identity", () => {
   const match = findCanonicalPlace(
     {
       companionId: "mira",
-      provider: "google",
+      provider: "osm",
       providerPoiId: "B001",
       name: "供应商改过的名字",
       latitude: 40.1,
@@ -48,8 +48,8 @@ test("place dedupe falls back to normalized name plus nearby coordinates", () =>
   const match = findCanonicalPlace(
     {
       companionId: "mira",
-      provider: "baidu",
-      providerPoiId: "baidu-9",
+      provider: "osm",
+      providerPoiId: "osm-9",
       name: " 三联韬奋书店 (美术馆店) ",
       latitude: 39.9232,
       longitude: 116.4109,
@@ -66,7 +66,7 @@ test("place dedupe never merges same-name distant branches", () => {
   const match = findCanonicalPlace(
     {
       companionId: "mira",
-      provider: "baidu",
+      provider: "osm",
       name: "三联韬奋书店（美术馆店）",
       latitude: 40.05,
       longitude: 116.5,

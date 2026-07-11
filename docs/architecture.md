@@ -54,9 +54,9 @@ The seed is SHA-256 over companion, window, engine version and purpose. A worker
 
 Weekday/weekend templates provide routine. Open loops and recent facts can propose adjustments; a seeded optional block provides bounded variation. Every change records `source`, `changeReason` and `correlationId`.
 
-Google Places results are cached before selected rows are persisted. Deduplication uses provider POI identity first, then normalized name plus coordinates within 150m. Route feasibility checks time, cost, opening state, reservation, weather and the available schedule window. Provider calls are never made inside a database transaction.
+Nominatim results are cached before selected rows are persisted. Deduplication uses provider POI identity first, then normalized name plus coordinates within 150m. OSRM feasibility checks time, cost, opening state, reservation, weather and the available schedule window. Provider calls are never made inside a database transaction.
 
-QWeather facts are short lived. Rain, snow, thunderstorms, strong wind or alerts can replace a future outdoor block with the nearest feasible indoor known place, but only within 12 hours. The physical weather event, schedule change and audit state change commit together and share an idempotency key.
+Open-Meteo facts are short lived. Rain, snow or thunderstorms can replace a future outdoor block with the nearest feasible indoor known place, but only within 12 hours. The physical weather event, schedule change and audit state change commit together and share an idempotency key.
 
 ## Share score and AwaitingReply
 
@@ -91,9 +91,9 @@ Definite Telegram failures may follow bounded retry policy. A network timeout af
 
 ## Provider failure and cost boundaries
 
-- Google Places: 7-day cache; Google Routes: 30-minute cache.
-- QWeather: 30-minute cache; GDELT: 2-hour cache.
-- Open-Meteo is the no-key weather fallback. Nominatim and public OSRM are best-effort map fallbacks, serialized to one request per second per instance and cached with the same place/route TTLs.
+- Nominatim: 7-day cache; OSRM: 30-minute cache.
+- Open-Meteo: 30-minute cache; GDELT: 2-hour cache.
+- Public map requests are serialized to one request per second per instance. Every provider is best effort and cannot block deterministic world progression.
 - Native fetch timeout and one retry for 429/5xx.
 - `Promise.allSettled` keeps one failed provider from blocking the world.
 - `nvidia/llama-nemotron-embed-vl-1b-v2:free` embeddings request 1024 dimensions and are batched for external-information dedupe.
