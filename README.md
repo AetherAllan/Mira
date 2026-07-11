@@ -1,70 +1,84 @@
 # Mira
 
-Mira 是一个运行在 Railway 上的 Telegram-native AI companion 原型。它不是把 ChatGPT 套进 Telegram，而是用一个可观察的 Psyche Engine 管理人格状态、选择性记忆、主动行为、内在世界和缓慢成长。
+Mira 是一个 Telegram-native AI companion，也是一个持续推进的北京生活世界。她有持久化的住所、工作、日程、地点、配角、未完成事项、情绪原因和分享动机；用户不发消息时，Railway World Tick 仍会按北京时间推进她的生活。
 
-当前实现以“能部署、能解释、能继续扩展”为目标：复杂决策使用启发式和 OpenRouter JSON 输出，外部调用失败时有确定性 fallback。
+这不是新闻播报 bot，也不是只跟随当前输入的角色扮演 prompt。Psyche 的 Id / Ego / Actor、人格、记忆、关系、情绪和成长继续存在；World Engine 独占物理世界事实的确认权限，Actor 只负责表达已落库的事实。
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  TG[Telegram webhook] --> WEB[Railway web service]
-  WEB --> RT[Psyche runtime]
-  HOURLY[Railway hourly cron] --> RT
-  DAILY[Railway daily cron] --> RT
-  RT --> ID[Id / drives]
-  RT --> EGO[Ego / action plan]
-  RT --> ACTOR[Actor]
-  RT --> MEM[Memory / World / Growth]
-  RT --> DB[(Neon Postgres + pgvector)]
-  RT --> LLM[OpenRouter Chat Completions]
-  RT --> TG
-  DASH[Dashboard] --> DB
+  EXT[Google Maps / QWeather / GDELT] --> ING[Ingestion + cache + dedupe]
+  TG[Telegram webhook] --> INPUT[User signal parser]
+  CRON[Railway world cron] --> TICK[Deterministic World Tick]
+  ING --> TICK
+  INPUT --> WORLD[(Persistent World)]
+  TICK --> WORLD
+  WORLD --> THOUGHT[Inner Thought]
+  THOUGHT --> SHARE[Share Candidate]
+  SHARE --> EGO[Ego]
+  INPUT --> EGO
+  EGO --> ACTOR[Actor + grounding validator]
+  ACTOR --> OUTBOX[(Logical message + outbox)]
+  OUTBOX --> TGAPI[Telegram Bot API]
+  DASH[Today / Map / Timeline / World Debug] --> WORLD
 ```
 
-主要目录：
+核心不变量：
 
-- `app/`：Next.js App Router 页面、Dashboard 和 Route Handlers。
-- `core/`：消息 runtime、prompt 组装、指标和事件日志。
-- `psyche/`：Analyzer、Id、Ego、Actor、Memory、World、Growth、Novelty。
-- `db/`：Drizzle schema、Neon client 和 repository。
-- `telegram/`：Webhook 解析、鉴权和 Bot API client。
-- `tools/`：只允许调用 registry 中登记的工具；当前只有 mock photo。
-- `scripts/`：数据库、seed、webhook 和 Railway Cron 入口。
-- `drizzle/`：可审查的增量 SQL migrations。
+- 数据库时间保存 UTC，日历、quiet hours 和日程使用 `Asia/Shanghai`。
+- 15 分钟 tick 以 `(companionId, windowStart)` 唯一，seed 由 SHA-256 派生，可重放。
+- 外部请求不放在数据库事务里；provider 失败不能阻断普通世界推进。
+- 物理到访必须通过日程、地点、路线、开放时间、天气和非瞬移校验。
+- 主动消息必须来自持久化的事件、想法、open loop 或用户 follow-up。
+- 逻辑消息和 bubble outbox 先事务落库，再发 Telegram；网络结果未知时停止自动重试。
+- 所有关键状态变化带 `correlationId`，可在 World Debug 中沿因果链追踪。
+
+详细表结构、状态所有权和回滚策略见 [docs/architecture.md](docs/architecture.md)。
+
+## Main directories
+
+- `app/`：Next.js App Router、Dashboard 和 HTTP Route Handlers。
+- `core/`：消息 runtime、Actor context、prompt budget、metrics 和 audit。
+- `psyche/`：Analyzer、Id、Ego、Actor、Memory、Growth、Novelty。
+- `world/`：日程、tick reducer、事件、地点、分享、回复期待、grounding 和 providers。
+- `db/`：Drizzle schema 和按领域拆分的 repositories。
+- `messaging/`：transactional outbox drain。
+- `telegram/`：Webhook 验证、bubble 拆分和 Telegram transport。
+- `drizzle/`：additive migrations；`drizzle/down/` 是测试库回滚 SQL。
+- `scripts/`：seed、webhook、cron 和固定验收 demo。
 
 ## Requirements
 
 - Bun 1.3+
-- Node.js 20.9+（Next.js / Railway runtime）
-- Neon Postgres，并启用 pgvector
-- Telegram Bot token
+- Node.js 20.9+
+- Neon Postgres 或 Railway Postgres，并启用 pgvector
+- Telegram bot
 - OpenRouter API key
 - Railway project
 
 ## Environment variables
 
-本地复制 `.env.example` 为 `.env`。Railway Web、hourly cron、daily cron 三个服务需要引用同一组变量。
+复制 `.env.example` 为 `.env`：
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | yes | Telegram Bot API |
-| `TELEGRAM_ALLOWED_USER_ID` | yes | 唯一允许使用 bot 的 Telegram user id |
-| `TELEGRAM_WEBHOOK_SECRET` | yes | 校验 `X-Telegram-Bot-Api-Secret-Token` |
-| `BASE_URL` | no | 默认 `https://openrouter.ai/api/v1`，只在服务端使用 |
+| `DATABASE_URL` | yes | Postgres TCP connection string |
 | `API_KEY` | yes | OpenRouter API key |
-| `MODEL` | no | 默认 `openai/gpt-4.1-mini` |
-| `DATABASE_URL` | yes | Neon pooled Postgres URL |
-| `CRON_SECRET` | yes | 保护 HTTP cron routes |
-| `ADMIN_PASSWORD` | yes | Dashboard 登录密码 |
+| `BASE_URL` | no | 默认 `https://openrouter.ai/api/v1` |
+| `MODEL` | no | Actor / Analyzer / reflection 模型 |
+| `TELEGRAM_BOT_TOKEN` | yes | Telegram Bot API |
+| `TELEGRAM_ALLOWED_USER_ID` | yes | 允许使用 bot 的唯一用户 |
+| `TELEGRAM_WEBHOOK_SECRET` | yes | Webhook secret-token 校验 |
+| `CRON_SECRET` | yes | HTTP cron route 保护 |
+| `ADMIN_PASSWORD` | yes | Dashboard httpOnly cookie 登录 |
+| `GOOGLE_MAPS_API_KEY` | provider | Places、Routes、服务端 Static Maps |
+| `QWEATHER_API_KEY` | provider | 北京实时天气和预警 |
+| `QWEATHER_API_HOST` | provider | 和风天气账户专属 API Host |
+| `EXTERNAL_INGESTION_ENABLED` | no | 显式启用无 key 的 GDELT ingestion |
+| `TEST_DATABASE_URL` | tests | 仅允许数据库名为 `mira_test` |
 
-建议生成随机 secret：
-
-```bash
-openssl rand -hex 32
-```
-
-不要把 `API_KEY`、Bot token、数据库 URL 或密码写入客户端变量，也不要使用 `NEXT_PUBLIC_` 前缀。
+不要给密钥添加 `NEXT_PUBLIC_` 前缀。Google 静态图由服务端代理，key 不进入浏览器 URL。
 
 ## Local development
 
@@ -75,195 +89,163 @@ bun run seed
 bun run dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000)。Dashboard 入口是 `/login`，登录后访问 `/dashboard`。
+打开 `http://localhost:3000/login`，使用 `ADMIN_PASSWORD` 登录。
 
-提交前检查：
+质量门：
 
 ```bash
-bun run test
 bun run typecheck
+bun run lint
+bun run test:unit
+bun run test:integration
 bun run build
 bunx drizzle-kit check
+git diff --check
 ```
 
-## Neon Postgres and pgvector
+集成测试必须使用独立数据库：
 
-1. 在 Neon 创建 project/database。
-2. 把 pooled connection string 写入 `DATABASE_URL`。
-3. 运行 migration 和 seed：
+```bash
+TEST_DATABASE_URL='postgresql://.../mira_test' bun run test:integration
+```
+
+测试会拒绝任何不叫 `mira_test` 的数据库。
+
+## Database setup and migrations
+
+1. 创建 Postgres database。
+2. 确保用户可以执行 `CREATE EXTENSION IF NOT EXISTS vector`。
+3. 配置 `DATABASE_URL`。
+4. 执行：
 
 ```bash
 bun run db:migrate
 bun run seed
 ```
 
-`0000_init.sql` 会执行 `CREATE EXTENSION IF NOT EXISTS vector`。已有数据库升级使用增量 migration，不要重写已经执行过的 migration。
+生产环境只追加 migration，不修改已经发布的 SQL。`bun run db:push` 仅用于本地探索。回滚时先暂停四类 cron、排空或检查 outbox、回退应用；`drizzle/down/` 只在 `mira_test` 验证，不建议生产直接删表。
 
-开发期如果要让 schema 直接对齐数据库，也可以运行：
+## Telegram setup
 
-```bash
-bun run db:push
-bun run db:studio
-```
-
-`db:push` 适合本地快速迭代；生产环境优先使用可审查的 `db:migrate`。
-
-当前数据库 client 使用 `@neondatabase/serverless` 的 Neon HTTP driver。如果以后改用普通 Railway Postgres，需要同时更换 driver，并确认数据库安装了 pgvector；不能只替换 `DATABASE_URL`。
-
-## Create the Telegram bot
-
-1. 在 Telegram 找 `@BotFather`。
-2. 执行 `/newbot` 并保存 token。
-3. 给 bot 发一条私聊消息。
-4. 通过 Bot API `getUpdates` 或可信工具取得自己的数字 user id，写入 `TELEGRAM_ALLOWED_USER_ID`。
-
-Mira 只接受私聊。群聊会被忽略，避免 Telegram 的 `message_id` 在不同 chat 中碰撞。
-
-## Deploy the Web service to Railway
-
-仓库根目录的 `railway.json` 只固定共享的 Railpack builder。Web 和两个 Cron 使用不同的 Railway service settings，避免同仓库配置覆盖各自的启动命令。
-
-```bash
-railway login
-railway link
-railway up --detach --message "Deploy Mira web runtime"
-railway domain
-```
-
-首次部署后，把 Railway domain 写入 `BASE_URL` **是不对的**：`BASE_URL` 是 OpenRouter API 地址。Telegram webhook URL 应单独传给设置脚本。
-
-在 Railway 为 Web 服务配置全部环境变量，然后执行生产 migration/seed：
-
-```bash
-railway run bun run db:migrate
-railway run bun run seed
-```
-
-健康检查：
-
-```bash
-curl -fsS https://YOUR_DOMAIN/api/health
-```
-
-返回 `configured: false` 表示进程已启动，但运行密钥尚未配置；它不代表数据库 migration 已完成。
-
-## Set the Telegram webhook
+1. 在 `@BotFather` 创建 bot。
+2. 给 bot 发私聊并取得自己的数字 user id。
+3. 配置 token、allowed user id 和 webhook secret。
+4. Web 服务上线后注册 webhook：
 
 ```bash
 bun run telegram:set-webhook -- https://YOUR_DOMAIN
 ```
 
-脚本会注册：
-
-```text
-https://YOUR_DOMAIN/api/telegram/webhook
-```
-
-Webhook route 会同时校验 Telegram secret token、允许的 user id 和 private chat。查看 Telegram 投递状态：
+注册路径固定为 `/api/telegram/webhook`。验证：
 
 ```bash
 curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo"
 ```
 
-不要把真实 token 放进工单、截图或 shell history。
+Mira 只接受允许用户的私聊。Webhook 重试由 incoming message 幂等键和 processing lease 吸收。
 
-## Railway Cron
+## Railway deployment
 
-Railway Cron 启动一个短进程，任务完成后必须退出。因此 cron 服务直接运行 runtime，不启动 Next.js Web server。
-
-同一仓库创建两个独立 Railway service，并设置各自的 start command 和 UTC schedule：
-
-| Service | Schedule (UTC) | Start command |
-| --- | --- | --- |
-| `mira-hourly` | `0 * * * *` | `bun run cron:hourly` |
-| `mira-daily` | `50 14 * * *` | `bun run cron:daily` |
-
-`50 14 * * *` 对应 Asia/Tokyo 23:50。两个 cron service 必须引用和 Web 相同的 Neon、OpenRouter、Telegram 配置。它们不需要 public domain 或 healthcheck。
-
-HTTP routes 仍保留给手动验证或外部调度器，并且必须校验 `CRON_SECRET`：
+Web service：
 
 ```bash
-curl -fsS -H "Authorization: Bearer $CRON_SECRET" \
-  https://YOUR_DOMAIN/api/cron/hourly
-
-curl -fsS -H "Authorization: Bearer $CRON_SECRET" \
-  https://YOUR_DOMAIN/api/cron/daily
+railway login
+railway link
+railway up --detach --message "Deploy Mira"
+railway domain
+railway run bun run db:migrate
+railway run bun run seed
 ```
 
-这些调用可能真的发送 Telegram 消息或写 daily journal，不要在生产环境反复执行。
+`BASE_URL` 是 OpenRouter 地址，不是 Railway domain。健康检查为 `/api/health`。
+
+Railway cron 使用 UTC，创建四个独立 service，共享同一组数据库、Telegram、OpenRouter 和 provider 变量：
+
+| Service | UTC schedule | Beijing meaning | Start command |
+| --- | --- | --- | --- |
+| `mira-world` | `*/15 * * * *` | 每 15 分钟 | `bun run cron:world` |
+| `mira-outbox` | `*/5 * * * *` | 每 5 分钟补发可安全重试项 | `bun run cron:outbox` |
+| `mira-hourly` | `0 * * * *` | 每小时消费 share candidates | `bun run cron:hourly` |
+| `mira-daily` | `50 15 * * *` | 北京时间 23:50 | `bun run cron:daily` |
+
+Cron 进程直接调用 runtime 并在完成后退出。HTTP route 也可手动验收，但必须带 `CRON_SECRET`：
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron/world
+curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron/outbox
+curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron/hourly
+curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron/daily
+```
+
+这些 route 会写数据库，hourly/outbox 还可能真的发送 Telegram；不要在生产重复点。
+
+## Beijing providers
+
+- [Google Places Text Search](https://developers.google.com/maps/documentation/places/web-service/text-search)：按需搜索，不导入全北京 POI；最多保留 20 个候选，选中结果幂等写入 `KnownPlace`。
+- [Google Routes](https://developers.google.com/maps/documentation/routes/compute_route_directions)：步行、骑行和公共交通可行性；缓存 30 分钟。
+- [Google Static Maps](https://developers.google.com/maps/documentation/maps-static/start)：仅后台服务端代理；客户端看不到 key。
+- QWeather：当前天气和预警，缓存 30 分钟；雨雪等风险只影响 12 小时内的日程。
+- GDELT：北京、本地生活、科技和游戏新闻候选，缓存 2 小时。
+- OpenRouter `baai/bge-m3`：1024 维外部信息去重 embedding。
+
+新闻只保存 URL、标题、短摘要和结构化事实，不保存全文。Provider 通过 timeout、一次 429/5xx retry、TTL cache 和 `Promise.allSettled` 隔离故障。
 
 ## Dashboard
 
-Dashboard 使用 `ADMIN_PASSWORD` 登录，并把登录状态放在 httpOnly cookie 中。页面包括：
+- Overview：消息、主动预算、工具、记忆、人格状态和最近事件。
+- Today：北京时间、当前位置、当前活动、今日完成项和有原因的计划变化。
+- Map：Google 服务端静态图、去过/想去/用户推荐/共同记忆地点。
+- Timeline：重要世界事件、地点、角色、用户影响和后续。
+- World Debug：WorldState、Schedule、Characters、OpenLoops、SharedKnowledge、InnerThoughts、ShareCandidates、AwaitingReply、ExternalInformation、Tick Log、Prompt Context 和 LLM usage。
+- Conversations / State / Psyche / Memory / Events / Proactive / Tools / Audit / Settings：保留原人格 runtime 的可观测性和配置能力。
 
-- Overview：今日消息、主动预算、工具、记忆、mood、active arcs、近期事件。
-- Conversations：消息、annotation、topics、importance、novelty、raw JSON。
-- State：traits、mood、drives、relationship、7 天图表和状态变化。
-- Psyche：Id 驱动、Ego action plan、Actor 配置、cooldown。
-- Memory / World：记忆、seed cards、world events 和手动维护入口。
-- Events / Proactive / Tools：完整运行日志和主动性原因。
-- Audit：人格变化、记忆写入、工具调用和 daily reflection 的证据。
-- Settings：角色、policy、quiet hours、模型、边界和 seed cards。
+`/dashboard/world` 仍表示 Inner World；北京持久世界使用 Today、Map、Timeline 和 World Debug。
 
-数据库不可用时 Dashboard 会明确显示 demo snapshot，不会把 demo 数据标成实时数据。
+## Runtime verification
 
-## Test the runtime
-
-Telegram：
-
-1. 确认 `getWebhookInfo` 中 URL 和最近错误为空。
-2. 使用允许的账号给 bot 发私聊消息。
-3. 检查 Dashboard Conversations 和 Events。
-4. 确认出现 `user.message`、`psyche.analyzer`、`psyche.ego.plan`、`assistant.message`。
-
-Hourly proactive：
+固定、无外部密钥的验收：
 
 ```bash
-bun run cron:hourly
+bun run demo:world
 ```
 
-它可能因为 quiet hours、每日预算、最短间隔或分数不足而选择不发送；这也是正常且可审计的结果。
+它使用固定周五北京时间和 seed，验证：工作日计划、降雨改去室内地点、普通事件、InnerThought、ShareCandidate、fake Telegram、用户地点推荐，以及重要问题未回复后的有限 disappointment 和渐进恢复。
 
-Daily reflection：
+手动 runtime：
 
 ```bash
+bun run cron:world
+bun run cron:outbox
+bun run cron:hourly
 bun run cron:daily
 ```
-
-同一 companion/date 只会写入一次 journal。traits 的单日变化在 Growth Engine 中硬限制为每项不超过 `0.01`。
 
 ## API routes
 
 - `POST /api/telegram/webhook`
+- `GET /api/cron/world`
+- `GET /api/cron/outbox`
 - `GET /api/cron/hourly`
 - `GET /api/cron/daily`
 - `POST /api/admin/login`
-- `GET /api/admin/state`
-- `GET /api/admin/messages`
-- `GET|POST|DELETE /api/admin/memories`
-- `GET /api/admin/events`
-- `GET|POST /api/admin/settings`
-- `POST /api/admin/seed`
+- `GET /api/admin/state|messages|memories|events|settings`
+- `GET /api/admin/world/map-image`
+- `GET /api/admin/world/trace`
 - `POST /api/admin/world/generate`
-- `GET /api/health`
 
-## Design Notes
+## Design notes
 
-- **OpenRouter only**：当前只实现 OpenAI-compatible Chat Completions，不做 provider abstraction。
-- **没有二次审查模块**：Actor 直接输出；危机表达使用确定性 safety override，工具名由 registry allowlist 约束，角色边界进入 Actor prompt。
-- **选择性记忆**：importance threshold、use count 和 cooldown 防止所有内容都被保存或重复消费。
-- **跨服务状态一致性**：Web 与 Cron 使用数据库 compare-and-swap 和重试，避免整块状态互相覆盖。
-- **主动预算先占用**：发送前创建 reservation，失败时释放；发送成功但后续持久化失败时保留占用，避免下一次 cron 连续打扰。
-- **Telegram 是至少一次投递**：Telegram webhook 会重试。当前 processing lease 和幂等记录能覆盖常见重复请求，但“Telegram 已发送、assistant 数据库写入失败”仍可能产生重复回复。严格 exactly-once 需要数据库 outbox/queue，是后续升级项。
-- **同步消息链路**：一次 webhook 内完成最多三次 20 秒 LLM 调用。流量或延迟上升后，应把处理改成 durable queue/outbox。
-- **mock photo 明示为生成内容**：不会声称真实拍照、旅行或现实存在。
-- **Health 是进程健康，不是数据库验收**：部署后仍必须单独运行 migration、seed 和真实 Telegram smoke test。
+- 角色 profile 在 `companions.configJson`，北京默认设定不写进业务条件分支。
+- 配角是持久化的虚构人物；系统不模拟完整多 Agent 社会。
+- 日程以代码模板生成，接近 60% 稳定习惯、25% 事件调整、15% seeded 变化；普通 tick 不调用 LLM。
+- Actor context 默认约 6000 estimated tokens，身份、当前状态和当前消息不会被裁剪；当前消息只出现一次。
+- Actor 可在 Ego 明确允许时使用 [OpenRouter web search](https://openrouter.ai/docs/guides/features/server-tools/web-search)，但外部事实必须带来源，个人经历仍不能从网络生成。
+- Telegram API 没有服务端幂等键。请求超时会标记 `delivery_unknown` 并停止自动重发，以避免重复轰炸；这比伪装 exactly-once 更诚实。
+- 旧 `known_places.provider=amap` 只为历史数据可读；运行时没有 AMap adapter，也不再需要 AMap key。
 
 ## Next steps
 
-- 数据库 outbox 和异步 webhook worker。
-- Embedding 写入、pgvector 相似度检索和 memory consolidation。
-- 更细的 safety policy 与可测试的边界规则。
-- 真实图片 provider，但保持同一个 tool registry contract。
-- 多用户隔离、正式身份系统、rate limit 和 observability。
-- Railway preview environment 与 migration gate。
+- 使用真实 Google/QWeather key 跑北京 POI、路线、天气和静态图 smoke test。
+- 将用户推荐地点的自主采纳策略从规则扩展为可审计的 planner proposal。
+- 给新闻实体去重补充批量 embedding 队列，避免 ingestion 峰值。
+- 增加周级模拟回归和 provider 预算报警。
