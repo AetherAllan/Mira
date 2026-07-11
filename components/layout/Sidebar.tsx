@@ -5,14 +5,18 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   BrainCircuit,
+  Bug,
+  CalendarDays,
   Database,
   Gauge,
   History,
   MessagesSquare,
+  MapPinned,
   Orbit,
   Radio,
   Settings,
   Sparkles,
+  TimerReset,
   Wrench,
   X,
 } from "lucide-react";
@@ -20,11 +24,15 @@ import { cn } from "@/lib/utils";
 
 const navigation = [
   { href: "/dashboard", label: "Overview", icon: Gauge },
+  { href: "/dashboard/today", label: "Today", icon: CalendarDays },
+  { href: "/dashboard/map", label: "Map", icon: MapPinned },
+  { href: "/dashboard/timeline", label: "Timeline", icon: TimerReset },
   { href: "/dashboard/conversations", label: "Conversations", icon: MessagesSquare },
   { href: "/dashboard/state", label: "State", icon: Activity },
   { href: "/dashboard/psyche", label: "Psyche", icon: BrainCircuit },
   { href: "/dashboard/memory", label: "Memory", icon: Database },
-  { href: "/dashboard/world", label: "World", icon: Orbit },
+  { href: "/dashboard/world", label: "Inner World", icon: Orbit },
+  { href: "/dashboard/world-debug", label: "World Debug", icon: Bug },
   { href: "/dashboard/events", label: "Events", icon: Radio },
   { href: "/dashboard/proactive", label: "Proactive", icon: Sparkles },
   { href: "/dashboard/tools", label: "Tools", icon: Wrench },
@@ -67,7 +75,9 @@ export function Sidebar({ mobile = false, onClose }: SidebarProps) {
         <p className="px-3 pb-2 font-mono text-[9px] uppercase tracking-[0.22em] text-zinc-700">observability</p>
         <div className="space-y-0.5">
           {navigation.map(({ href, label, icon: Icon }) => {
-            const active = href === "/dashboard" ? pathname === href : pathname.startsWith(href);
+            const active = href === "/dashboard" || href === "/dashboard/world"
+              ? pathname === href
+              : pathname.startsWith(href);
             return (
               <Link
                 key={href}

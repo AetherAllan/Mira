@@ -5,11 +5,15 @@ import { Menu, Search } from "lucide-react";
 
 const labels: Record<string, { title: string; eyebrow: string }> = {
   "/dashboard": { title: "Runtime Overview", eyebrow: "Mira / OBSERVATORY" },
+  "/dashboard/today": { title: "Today in Beijing", eyebrow: "WORLD / NOW" },
+  "/dashboard/map": { title: "Persistent Map", eyebrow: "BEIJING / KNOWN PLACES" },
+  "/dashboard/timeline": { title: "World Timeline", eyebrow: "EVENT / CAUSAL CHAIN" },
   "/dashboard/conversations": { title: "Conversation Trace", eyebrow: "TELEGRAM / MESSAGE BUS" },
   "/dashboard/state": { title: "State Vector", eyebrow: "GROWTH / CHANGE LOG" },
   "/dashboard/psyche": { title: "Psyche Engine", eyebrow: "ID / EGO / ACTOR" },
   "/dashboard/memory": { title: "Selective Memory", eyebrow: "RECALL / COOLDOWN" },
   "/dashboard/world": { title: "Inner World", eyebrow: "SEEDS / MOTIFS / SCENES" },
+  "/dashboard/world-debug": { title: "World Debug", eyebrow: "STATE / TRACE / PROMPT" },
   "/dashboard/events": { title: "Event Stream", eyebrow: "RUNTIME / AUDIT TRAIL" },
   "/dashboard/proactive": { title: "Proactive Control", eyebrow: "AGENCY / RESTRAINT" },
   "/dashboard/tools": { title: "Tool Registry", eyebrow: "ALLOWLIST / EXECUTION" },
@@ -42,4 +46,3 @@ export function Header({ onMenu }: { onMenu: () => void }) {
     </header>
   );
 }
-
