@@ -11,6 +11,7 @@ import {
   worldStateRowToDomain,
 } from "@/db/worldRepo";
 import { processAwaitingReplyTimeouts } from "@/db/awaitingReplyRepo";
+import { applyWeatherScheduleAdjustment } from "@/db/weatherRepo";
 import { ingestBeijingExternalInformation } from "@/world/providers/service";
 import { zonedDateKey } from "@/lib/time";
 import { DEFAULT_CHARACTER_PROFILE } from "@/seed/world";
@@ -58,6 +59,7 @@ type CompanionTickResult = {
   error?: string;
   awaitingRepliesProcessed?: number;
   externalIngestion?: { status: string; inserted: number; failures: string[] };
+  weatherScheduleAdjusted?: boolean;
 };
 
 function profileOrDefault(value: CharacterProfile | undefined) {
@@ -428,8 +430,21 @@ export async function runWorldTick(now = new Date()) {
         inserted: 0,
         duplicates: 0,
         failures: [error instanceof Error ? error.message : String(error)],
+        weatherRisk: 0,
+        weatherSummary: null,
       }));
       const result = await runCompanionTick(companion, completedEnd);
+      const weatherAdjustment = ingestion.weatherSummary
+        ? await applyWeatherScheduleAdjustment({
+            companionId: companion.id,
+            now: completedEnd,
+            weatherRisk: ingestion.weatherRisk,
+            weatherSummary: ingestion.weatherSummary,
+          }).catch((error) => ({
+            adjusted: false,
+            reason: error instanceof Error ? error.message : String(error),
+          }))
+        : { adjusted: false };
       const awaiting = await processAwaitingReplyTimeouts(
         companion.id,
         completedEnd,
@@ -445,6 +460,7 @@ export async function runWorldTick(now = new Date()) {
           inserted: ingestion.inserted,
           failures: ingestion.failures,
         },
+        weatherScheduleAdjusted: weatherAdjustment.adjusted,
       });
     } catch (error) {
       results.push({

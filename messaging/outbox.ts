@@ -14,6 +14,8 @@ export interface OutboxDrainResult {
   unknown: number;
 }
 
+export type TelegramTransport = typeof sendTelegramBubble;
+
 /**
  * Drain one logical message in bubble order, or a small global batch for cron.
  * A delivery-unknown row stops the sequence because later bubbles would make
@@ -22,6 +24,7 @@ export interface OutboxDrainResult {
 export async function drainTelegramOutbox(
   messageId?: string,
   maxItems = messageId ? 6 : 20,
+  transport: TelegramTransport = sendTelegramBubble,
 ): Promise<OutboxDrainResult> {
   const result: OutboxDrainResult = { delivered: 0, failed: 0, unknown: 0 };
 
@@ -30,7 +33,7 @@ export async function drainTelegramOutbox(
     if (!item) break;
 
     try {
-      const sent = await sendTelegramBubble(item.chatId, item.body);
+      const sent = await transport(item.chatId, item.body);
       await markOutboxDelivered({
         id: item.id,
         leaseToken: item.leaseToken,

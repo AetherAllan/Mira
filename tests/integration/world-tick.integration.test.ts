@@ -10,7 +10,9 @@ import {
   knownPlaces,
   llmUsageLogs,
   messages,
+  messageOutbox,
   promptContextSnapshots,
+  scheduleBlocks,
   shareCandidates,
   users,
   worldStates,
@@ -19,9 +21,11 @@ import {
 } from "@/db/schema";
 import {
   getCachedProviderValue,
+  persistDiscoveredPlaces,
   persistExternalFacts,
   setCachedProviderValue,
 } from "@/db/providerRepo";
+import { applyWeatherScheduleAdjustment } from "@/db/weatherRepo";
 import {
   processAwaitingReplyTimeouts,
   resolveAwaitingReplies,
@@ -57,6 +61,12 @@ import { runWorldTick } from "@/world/tick";
 import { inferWorldSignals } from "@/world/userSignals";
 import { applyLongTermReflectionEvolution } from "@/db/reflectionRepo";
 import { recordLlmUsage } from "@/db/usageRepo";
+import {
+  enqueueAssistantMessage,
+  listMessageOutbox,
+} from "@/db/messageOutboxRepo";
+import { drainTelegramOutbox } from "@/messaging/outbox";
+import { TelegramSendError } from "@/telegram/client";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 const enabled = Boolean(testDatabaseUrl);
@@ -73,7 +83,7 @@ if (testDatabaseUrl) {
 
 test(
   "world tick is idempotent across workers and rejects a stale lease",
-  { skip: !enabled, timeout: 120_000 },
+  { skip: !enabled, timeout: 180_000 },
   async () => {
     const suffix = crypto.randomUUID();
     const db = getDb();
@@ -94,6 +104,34 @@ test(
         DEFAULT_RUNTIME_CONFIG.character.profile,
         new Date("2026-07-10T02:07:00.000Z"),
       );
+      const discovered = {
+        companionId: companion.id,
+        places: [{
+          provider: "google" as const,
+          providerId: `google-fixture-${suffix}`,
+          name: "集成测试书店",
+          category: "book_store",
+          district: "朝阳区",
+          address: "北京市朝阳区测试路 1 号",
+          coordinates: { latitude: 39.921, longitude: 116.461 },
+          distanceMeters: null,
+        }],
+        discoveredAt: new Date("2026-07-10T02:07:30.000Z"),
+        correlationId: "00000000-0000-4000-8000-000000000107",
+      };
+      assert.equal((await persistDiscoveredPlaces(discovered)).inserted, 1);
+      assert.equal((await persistDiscoveredPlaces(discovered)).inserted, 0);
+      const [googlePlace] = await db
+        .select()
+        .from(knownPlaces)
+        .where(
+          and(
+            eq(knownPlaces.companionId, companion.id),
+            eq(knownPlaces.providerPoiId, discovered.places[0].providerId),
+          ),
+        );
+      assert.equal(googlePlace?.provider, "google");
+      assert.equal(googlePlace?.coordinateSystem, "wgs84");
       const [journal] = await db.insert(internalJournals).values({
         companionId: companion.id,
         date: "2026-07-09",
@@ -158,6 +196,49 @@ test(
       });
       const [usage] = await db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companion.id));
       assert.equal(usage?.totalTokens, 150);
+
+      const enqueueInput = {
+        userId: user.id,
+        companionId: companion.id,
+        chatId: "integration-chat",
+        text: "first bubble\nsecond bubble",
+        rawJson: { integration: true },
+        correlationId: "00000000-0000-4000-8000-000000000109",
+        sourceType: "proactive" as const,
+        sourceId: `integration-outbox:${suffix}`,
+        idempotencyBase: `integration-outbox:${suffix}`,
+        annotation: {
+          topics: [{ name: "integration", confidence: 1 }],
+          emotion: "neutral",
+          intent: "outbox_test",
+          importance: 0.5,
+          novelty: 0.5,
+          summary: "outbox integration",
+          worldSignals: [],
+        },
+      };
+      const enqueued = await Promise.all([
+        enqueueAssistantMessage(enqueueInput),
+        enqueueAssistantMessage(enqueueInput),
+      ]);
+      assert.equal(enqueued.filter((item) => item.created).length, 1);
+      const logicalMessage = enqueued.find((item) => item.message)?.message;
+      assert.ok(logicalMessage);
+      assert.equal((await listMessageOutbox(logicalMessage.id)).length, 2);
+      let transportCalls = 0;
+      const delivery = await drainTelegramOutbox(logicalMessage.id, 6, async () => {
+        transportCalls += 1;
+        if (transportCalls === 2) {
+          throw new TelegramSendError("fixture timeout", "delivery_unknown", false);
+        }
+        return { messageId: 9001, raw: { ok: true, result: { message_id: 9001 } } };
+      });
+      assert.deepEqual(delivery, { delivered: 1, failed: 0, unknown: 1 });
+      const outboxRows = await db
+        .select()
+        .from(messageOutbox)
+        .where(eq(messageOutbox.messageId, logicalMessage.id));
+      assert.deepEqual(outboxRows.map((row) => row.status).sort(), ["delivered", "delivery_unknown"]);
 
       const [message] = await db
         .insert(messages)
@@ -262,6 +343,64 @@ test(
         externalRows.map((row) => row.status).sort(),
         ["ignored", "new"],
       );
+
+      const park = persistentWorld.places.find(
+        (place) => place.canonicalKey === "seed:beijing:place:chaoyang-park",
+      );
+      assert.ok(park);
+      const [rainFact] = await db
+        .insert(externalInformation)
+        .values({
+          companionId: companion.id,
+          idempotencyKey: `integration-weather:${suffix}`,
+          sourceName: "QWeather fixture",
+          title: "北京降雨",
+          factualSummary: "北京傍晚持续降雨。",
+          category: "weather",
+          factsJson: { condition: "rain" },
+          fetchedAt: new Date("2026-07-10T08:30:00.000Z"),
+          beijingRelevance: 1,
+          personalRelevance: 1,
+          reliability: 0.9,
+          novelty: 0.8,
+        })
+        .returning();
+      assert.ok(rainFact);
+      const [outdoorPlan] = await db
+        .insert(scheduleBlocks)
+        .values({
+          companionId: companion.id,
+          idempotencyKey: `integration-outdoor-plan:${suffix}`,
+          title: "下班后去朝阳公园散步",
+          type: "exploration",
+          startAt: new Date("2026-07-10T11:00:00.000Z"),
+          endAt: new Date("2026-07-10T13:00:00.000Z"),
+          localDate: "2026-07-10",
+          locationId: park.id,
+          status: "planned",
+          source: "mira_decision",
+        })
+        .returning();
+      assert.ok(outdoorPlan);
+      const weatherAdjustment = await applyWeatherScheduleAdjustment({
+        companionId: companion.id,
+        now: new Date("2026-07-10T08:30:00.000Z"),
+        weatherRisk: 0.8,
+        weatherSummary: rainFact.factualSummary,
+      });
+      assert.equal(weatherAdjustment.adjusted, true);
+      const [changedOutdoorPlan] = await db
+        .select()
+        .from(scheduleBlocks)
+        .where(eq(scheduleBlocks.id, outdoorPlan.id));
+      assert.equal(changedOutdoorPlan?.status, "changed");
+      assert.notEqual(changedOutdoorPlan?.locationId, park.id);
+      assert.equal((await applyWeatherScheduleAdjustment({
+        companionId: companion.id,
+        now: new Date("2026-07-10T08:31:00.000Z"),
+        weatherRisk: 0.8,
+        weatherSummary: rainFact.factualSummary,
+      })).adjusted, false);
 
       const [candidate] = await db
         .insert(shareCandidates)

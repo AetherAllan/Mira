@@ -37,3 +37,9 @@ test("a romantic request influences affinity without forcing relationship state"
   );
   assert.ok(result.state.relationship.romanticAffinity < 0.1);
 });
+
+test("a next-time place recommendation remains a suggestion, not a forced plan", () => {
+  const signals = inferWorldSignals("你下次可以去三联韬奋书店看看，我觉得你会喜欢。");
+  assert.ok(signals.some((item) => item.type === "place_recommendation"));
+  assert.ok(signals.some((item) => item.type === "mira_suggestion"));
+});

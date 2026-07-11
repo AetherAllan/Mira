@@ -26,7 +26,7 @@ export function inferWorldSignals(text: string, now = new Date()): WorldSignal[]
   if (!content) return [];
   const signals: WorldSignal[] = [];
 
-  const placeMatch = /(?:推荐你|建议你|你(?:周末|下班后|有空时|哪天)?可以|你要不要)(?:周末|下班后|有空时|哪天)?(?:去|试试|看看|逛逛)?[「“\s]*([^，。！？!?]{2,28})/.exec(content);
+  const placeMatch = /(?:推荐你|建议你|你(?:下次|周末|下班后|有空时|哪天)?可以|你要不要)(?:下次|周末|下班后|有空时|哪天)?(?:去|试试|看看|逛逛)?[「“\s]*([^，。！？!?]{2,28})/.exec(content);
   if (placeMatch?.[1]) {
     signals.push(signal("place_recommendation", placeMatch[1].trim(), content, 0.76));
   }
@@ -43,7 +43,7 @@ export function inferWorldSignals(text: string, now = new Date()): WorldSignal[]
     signals.push(signal("user_schedule", "用户日程", content, 0.72));
   }
 
-  if (/(?:你周末|你下班后|你可以|你要不要|建议你).*(?:去|试试|看看|参加|别去)/.test(content)) {
+  if (/(?:你下次|你周末|你下班后|你可以|你要不要|建议你).*(?:去|试试|看看|参加|别去)/.test(content)) {
     signals.push(signal("mira_suggestion", "给 Mira 的建议", content, 0.7));
   }
 
