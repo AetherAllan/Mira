@@ -472,6 +472,78 @@ export const openLoops = pgTable(
   ],
 );
 
+export const sharedKnowledge = pgTable(
+  "shared_knowledge",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    subject: text("subject").notNull(),
+    content: text("content").notNull(),
+    source: text("source", { enum: ["user", "mira", "external"] }).notNull(),
+    sourceMessageId: uuid("source_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    confidence: real("confidence").notNull().default(0.5),
+    verificationStatus: text("verification_status", {
+      enum: ["unverified", "verified", "contradicted", "outdated"],
+    })
+      .notNull()
+      .default("unverified"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    correlationId: uuid("correlation_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("shared_knowledge_companion_idempotency_idx").on(
+      table.companionId,
+      table.idempotencyKey,
+    ),
+    index("shared_knowledge_companion_subject_idx").on(table.companionId, table.subject),
+    index("shared_knowledge_companion_status_updated_idx").on(
+      table.companionId,
+      table.verificationStatus,
+      table.updatedAt,
+    ),
+  ],
+);
+
+export const conversationWorkingMemories = pgTable(
+  "conversation_working_memories",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    currentTopic: text("current_topic"),
+    recentSummary: text("recent_summary").notNull().default(""),
+    unresolvedQuestionsJson: jsonb("unresolved_questions_json")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    userCommitmentsJson: jsonb("user_commitments_json")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    miraCommitmentsJson: jsonb("mira_commitments_json")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    emotionalContext: text("emotional_context"),
+    lastCorrelationId: uuid("last_correlation_id"),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("conversation_working_memories_companion_idx").on(table.companionId),
+    index("conversation_working_memories_updated_idx").on(table.lastUpdatedAt),
+  ],
+);
+
 export const worldTickRuns = pgTable(
   "world_tick_runs",
   {
@@ -712,5 +784,7 @@ export type WorldCharacterRow = typeof worldCharacters.$inferSelect;
 export type ScheduleBlockRow = typeof scheduleBlocks.$inferSelect;
 export type WorldStateRow = typeof worldStates.$inferSelect;
 export type OpenLoopRow = typeof openLoops.$inferSelect;
+export type SharedKnowledgeRow = typeof sharedKnowledge.$inferSelect;
+export type ConversationWorkingMemoryRow = typeof conversationWorkingMemories.$inferSelect;
 export type WorldTickRunRow = typeof worldTickRuns.$inferSelect;
 export type ProposedWorldMutationRow = typeof proposedWorldMutations.$inferSelect;

@@ -36,6 +36,7 @@ import {
   listMessageOutbox,
   type EnqueueAssistantInput,
 } from "@/db/messageOutboxRepo";
+import { applyUserWorldSignals } from "@/db/interactionRepo";
 import { logRuntimeEvent } from "@/core/eventLog";
 import {
   computeMirrorIndex,
@@ -130,6 +131,7 @@ function annotationAnalysis(annotation: Record<string, unknown> | undefined): Me
     importance: typeof annotation?.importance === "number" ? annotation.importance : 0.5,
     novelty: typeof annotation?.novelty === "number" ? annotation.novelty : 0.5,
     summary: typeof annotation?.summary === "string" ? annotation.summary : "",
+    worldSignals: [],
   };
 }
 
@@ -182,6 +184,7 @@ function buildAssistantAnnotation(
     importance: input.safety ? 1 : input.proactive ? 0.48 : Math.max(0.35, input.analysis.importance * 0.8),
     novelty: input.selectedSeed ? 0.72 : Math.min(0.65, input.analysis.novelty),
     summary: input.text.length > 120 ? `${input.text.slice(0, 117)}...` : input.text,
+    worldSignals: [],
   } satisfies MessageAnalysis;
 }
 
@@ -438,6 +441,15 @@ async function processTelegramMessage(
       correlationId,
     );
   }
+
+  await applyUserWorldSignals({
+    userId: context.user.id,
+    companionId: context.companion.id,
+    messageId: userMessage.row.id,
+    messageText: message.text,
+    analysis: analyzed.analysis,
+    correlationId,
+  });
 
   const timeZone = config.policy.quietHours.timeZone;
   const [

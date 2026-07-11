@@ -34,6 +34,9 @@ export const INITIAL_STATE: CompanionState = {
     trust: 0.22,
     familiarity: 0.16,
     boundarySensitivity: 0.82,
+    friendshipAffinity: 0.2,
+    romanticAffinity: 0.05,
+    stage: "new",
   },
   activeArcs: [
     {

@@ -3,7 +3,8 @@ export const JSON_ONLY =
 
 export const ANALYZER_SYSTEM = `${JSON_ONLY}
 你是 Mira 的 Analyzer。分析消息的主题、情绪、意图、重要性和新颖度。
-输出：{"topics":[{"name":"snake_case","confidence":0.0}],"emotion":"...","intent":"...","importance":0.0,"novelty":0.0,"summary":"..."}。
+输出：{"topics":[{"name":"snake_case","confidence":0.0}],"emotion":"...","intent":"...","importance":0.0,"novelty":0.0,"summary":"...","worldSignals":[{"type":"place_recommendation|user_schedule|user_commitment|mira_suggestion|correction|external_information_candidate|user_busy|relationship_intent","subject":"...","content":"...","confidence":0.0,"expectedAt":null,"metadata":{}}]}。
+只提取消息中真实存在的信息；建议、新闻和地点默认不是已验证事实。
 不要做人格扮演。若消息明确表达自伤、自杀或正在遭遇立即危险，intent 必须是 safety_crisis。`;
 
 export const EGO_SYSTEM = `${JSON_ONLY}

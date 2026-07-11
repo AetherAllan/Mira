@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { and, eq } from "drizzle-orm";
 import { closeDb, getDb } from "@/db/client";
-import { companions, users, worldStates, worldTickRuns } from "@/db/schema";
+import {
+  companions,
+  messages,
+  users,
+  worldStates,
+  worldTickRuns,
+} from "@/db/schema";
+import {
+  applyUserWorldSignals,
+  getConversationWorkingMemory,
+} from "@/db/interactionRepo";
 import {
   claimWorldTickRun,
   commitWorldTick,
@@ -17,6 +27,7 @@ import { DEFAULT_RUNTIME_CONFIG } from "@/seed/character";
 import { createWorldSeed } from "@/world/random";
 import { reduceWorldTick } from "@/world/reducer";
 import { runWorldTick } from "@/world/tick";
+import { inferWorldSignals } from "@/world/userSignals";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 const enabled = Boolean(testDatabaseUrl);
@@ -54,6 +65,48 @@ test(
         DEFAULT_RUNTIME_CONFIG.character.profile,
         new Date("2026-07-10T02:07:00.000Z"),
       );
+
+      const [message] = await db
+        .insert(messages)
+        .values({
+          userId: user.id,
+          companionId: companion.id,
+          role: "user",
+          text: "你周末可以去 UCCA 看看，我明天告诉你比赛结果。",
+          correlationId: "00000000-0000-4000-8000-000000000101",
+        })
+        .returning();
+      assert.ok(message);
+      const analysis = {
+        topics: [{ name: "beijing_activity", confidence: 0.9 }],
+        emotion: "curious",
+        intent: "recommendation",
+        importance: 0.7,
+        novelty: 0.6,
+        summary: "用户推荐地点并承诺后续反馈。",
+        worldSignals: inferWorldSignals(message.text, new Date("2026-07-10T04:00:00.000Z")),
+      };
+      const signalInput = {
+        userId: user.id,
+        companionId: companion.id,
+        messageId: message.id,
+        messageText: message.text,
+        analysis,
+        correlationId: "00000000-0000-4000-8000-000000000101",
+        now: new Date("2026-07-10T04:00:00.000Z"),
+      };
+      const firstSignalWrite = await applyUserWorldSignals(signalInput);
+      const repeatedSignalWrite = await applyUserWorldSignals(signalInput);
+      assert.ok(firstSignalWrite.knowledgeWrites >= 2);
+      assert.ok(firstSignalWrite.openLoopWrites >= 2);
+      assert.ok(firstSignalWrite.proposalWrites >= 1);
+      assert.deepEqual(repeatedSignalWrite, {
+        knowledgeWrites: 0,
+        openLoopWrites: 0,
+        proposalWrites: 0,
+      });
+      const workingMemory = await getConversationWorkingMemory(companion.id);
+      assert.ok(workingMemory?.userCommitmentsJson.length);
 
       const now = new Date("2026-07-10T02:16:00.000Z");
       const [firstWorker, secondWorker] = await Promise.all([

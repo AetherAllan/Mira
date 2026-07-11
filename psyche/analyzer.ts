@@ -1,7 +1,8 @@
-import type { MessageAnalysis, Topic } from "@/core/types";
+import type { JsonValue, MessageAnalysis, Topic, WorldSignal, WorldSignalType } from "@/core/types";
 import { callJson } from "@/llm/client";
 import { ANALYZER_SYSTEM } from "@/llm/prompts";
 import { asObject, asString, clamp01, type JsonObject } from "@/llm/json";
+import { inferWorldSignals } from "@/world/userSignals";
 
 const CRISIS_PATTERNS = [
   /(?:我)?(?:想|准备|打算)(?:去)?(?:死|自杀|伤害自己)/i,
@@ -49,7 +50,44 @@ function heuristicAnalysis(text: string): MessageAnalysis {
     importance: crisis ? 1 : Math.min(0.8, 0.38 + text.length / 500 + (distressed ? 0.15 : 0)),
     novelty: technical ? 0.55 : 0.42,
     summary: text.length > 100 ? `${text.slice(0, 97)}...` : text,
+    worldSignals: inferWorldSignals(text),
   };
+}
+
+const WORLD_SIGNAL_TYPES = new Set<WorldSignalType>([
+  "place_recommendation",
+  "user_schedule",
+  "user_commitment",
+  "mira_suggestion",
+  "correction",
+  "external_information_candidate",
+  "user_busy",
+  "relationship_intent",
+]);
+
+function validateWorldSignals(value: unknown): WorldSignal[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(asObject)
+    .filter((item): item is JsonObject => item !== null)
+    .flatMap((item) => {
+      const type = asString(item.type) as WorldSignalType;
+      const subject = asString(item.subject);
+      const content = asString(item.content);
+      if (!WORLD_SIGNAL_TYPES.has(type) || !subject || !content) return [];
+      const expectedAt = asString(item.expectedAt);
+      const metadata = asObject(item.metadata) as Record<string, JsonValue> | null;
+      return [{
+        type,
+        subject,
+        content,
+        confidence: clamp01(item.confidence, 0.5),
+        expectedAt:
+          expectedAt && Number.isFinite(new Date(expectedAt).getTime()) ? expectedAt : undefined,
+        metadata: metadata ?? undefined,
+      } satisfies WorldSignal];
+    })
+    .slice(0, 8);
 }
 
 function validateAnalysis(value: JsonObject): MessageAnalysis | null {
@@ -70,7 +108,17 @@ function validateAnalysis(value: JsonObject): MessageAnalysis | null {
     importance: clamp01(value.importance, 0.5),
     novelty: clamp01(value.novelty, 0.5),
     summary: asString(value.summary),
+    worldSignals: validateWorldSignals(value.worldSignals),
   };
+}
+
+function mergeWorldSignals(primary: WorldSignal[], fallback: WorldSignal[]) {
+  const unique = new Map<string, WorldSignal>();
+  for (const item of [...primary, ...fallback]) {
+    const key = `${item.type}:${item.subject.toLocaleLowerCase("zh-CN")}`;
+    if (!unique.has(key)) unique.set(key, item);
+  }
+  return [...unique.values()].slice(0, 8);
 }
 
 export async function analyzeMessage(text: string, model?: string): Promise<{
@@ -94,5 +142,13 @@ export async function analyzeMessage(text: string, model?: string): Promise<{
     temperature: 0.1,
     maxTokens: 500,
   });
-  return { analysis: result.data, raw: result.raw, usedFallback: result.usedFallback, error: result.error };
+  return {
+    analysis: {
+      ...result.data,
+      worldSignals: mergeWorldSignals(result.data.worldSignals, fallback.worldSignals),
+    },
+    raw: result.raw,
+    usedFallback: result.usedFallback,
+    error: result.error,
+  };
 }

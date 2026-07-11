@@ -43,7 +43,15 @@ const DRIVE_KEYS: Array<keyof Drives> = [
   "aestheticUrge",
   "noveltySeeking",
 ];
-const RELATIONSHIP_KEYS: Array<keyof Relationship> = ["closeness", "trust", "familiarity", "boundarySensitivity"];
+type NumericRelationshipKey = Exclude<keyof Relationship, "stage">;
+const RELATIONSHIP_KEYS: NumericRelationshipKey[] = [
+  "closeness",
+  "trust",
+  "familiarity",
+  "boundarySensitivity",
+  "friendshipAffinity",
+  "romanticAffinity",
+];
 
 function clamp(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -97,6 +105,28 @@ export function applyInteractionGrowth(state: CompanionState, analysis: MessageA
   drives.boredom = clamp(drives.boredom - 0.018);
   relationship.familiarity = clamp(relationship.familiarity + 0.004 + analysis.importance * 0.004);
   relationship.trust = clamp(relationship.trust + analysis.importance * 0.003);
+  relationship.friendshipAffinity = clamp(relationship.friendshipAffinity + 0.004);
+  const relationshipIntent = analysis.worldSignals.find(
+    (item) => item.type === "relationship_intent",
+  )?.metadata?.intent;
+  if (relationshipIntent === "friendship") {
+    relationship.friendshipAffinity = clamp(relationship.friendshipAffinity + 0.008);
+  } else if (relationshipIntent === "romantic") {
+    // A request can influence the relationship, but never flips its state by itself.
+    relationship.romanticAffinity = clamp(relationship.romanticAffinity + 0.01);
+  }
+  relationship.stage =
+    relationship.romanticAffinity >= 0.65 &&
+    relationship.trust >= 0.55 &&
+    relationship.closeness >= 0.55
+      ? "romantic"
+      : relationship.romanticAffinity >= 0.35 && relationship.trust >= 0.4
+        ? "ambiguous"
+        : relationship.friendshipAffinity >= 0.55
+          ? "close_friendship"
+          : relationship.friendshipAffinity >= 0.25
+            ? "friendship"
+            : "new";
 
   const next = { ...state, mood, drives, relationship };
   const changes = [
@@ -154,7 +184,7 @@ export function applyDailyReflection(state: CompanionState, reflection: DailyRef
   ) as Partial<Drives>;
   const relationshipUpdates = Object.fromEntries(
     RELATIONSHIP_KEYS.map((key) => [key, delta(reflection.relationshipUpdates[key], 0.03)]),
-  ) as Partial<Relationship>;
+  ) as Partial<Record<NumericRelationshipKey, number>>;
   const traits = applyNumericUpdates(state.traits, traitUpdates);
   const mood = applyNumericUpdates(state.mood, moodUpdates);
   const drives = applyNumericUpdates(state.drives, driveUpdates);

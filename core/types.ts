@@ -44,6 +44,9 @@ export interface Relationship {
   trust: number;
   familiarity: number;
   boundarySensitivity: number;
+  friendshipAffinity: number;
+  romanticAffinity: number;
+  stage: "new" | "friendship" | "close_friendship" | "ambiguous" | "romantic";
 }
 
 export interface ActiveArc {
@@ -73,6 +76,26 @@ export interface MessageAnalysis {
   importance: number;
   novelty: number;
   summary: string;
+  worldSignals: WorldSignal[];
+}
+
+export type WorldSignalType =
+  | "place_recommendation"
+  | "user_schedule"
+  | "user_commitment"
+  | "mira_suggestion"
+  | "correction"
+  | "external_information_candidate"
+  | "user_busy"
+  | "relationship_intent";
+
+export interface WorldSignal {
+  type: WorldSignalType;
+  subject: string;
+  content: string;
+  confidence: number;
+  expectedAt?: string;
+  metadata?: Record<string, JsonValue>;
 }
 
 export type ActionMode =

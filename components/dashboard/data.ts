@@ -152,6 +152,7 @@ const analysis: MessageAnalysis = {
   importance: 0.78,
   novelty: 0.44,
   summary: "用户正在讨论 AI companion 的人格 runtime 和前端可视化。",
+  worldSignals: [],
 };
 
 export const DEMO_DASHBOARD_DATA: DashboardData = {

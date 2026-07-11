@@ -99,7 +99,7 @@ function stateFromRow(row: typeof companionStates.$inferSelect): CompanionState 
     traits: row.traitsJson,
     mood: row.moodJson,
     drives: row.drivesJson,
-    relationship: row.relationshipJson,
+    relationship: { ...INITIAL_STATE.relationship, ...row.relationshipJson },
     activeArcs: row.activeArcsJson,
   };
 }
