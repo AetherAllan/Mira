@@ -1,6 +1,7 @@
 import { and, desc, eq, ne, or, isNull, gt } from "drizzle-orm";
 import type { CompanionState, RuntimeConfig, SelectedMemory } from "@/core/types";
 import type { ActorGroundedContext } from "@/core/promptBuilder";
+import { resolveActivityFreshness } from "@/core/actorContextPolicy";
 import { getDb } from "@/db/client";
 import {
   externalInformation,
@@ -110,8 +111,11 @@ export async function buildActorGroundedContext(input: {
     worldAdvancedThrough: world.lastWorldTickAt,
     timeZone,
   });
-  const confirmedActivity = schedule.find((block) => block.id === world.currentScheduleBlockId);
-  const currentActivity = temporal.worldStateFresh ? confirmedActivity : undefined;
+  const { currentActivity, lastConfirmedActivity } = resolveActivityFreshness({
+    schedule,
+    currentScheduleBlockId: world.currentScheduleBlockId,
+    worldStateFresh: temporal.worldStateFresh,
+  });
   const worldFacts = eventRows.reverse().map((event) => ({
     id: event.id,
     realityLayer: event.realityLayer,
@@ -169,8 +173,8 @@ export async function buildActorGroundedContext(input: {
         }
       : null,
     lastConfirmedActivity:
-      !temporal.worldStateFresh && confirmedActivity
-        ? { id: confirmedActivity.id, title: confirmedActivity.title, type: confirmedActivity.type }
+      lastConfirmedActivity
+        ? { id: lastConfirmedActivity.id, title: lastConfirmedActivity.title, type: lastConfirmedActivity.type }
         : null,
     schedule: schedule.map((block) => ({
       id: block.id,

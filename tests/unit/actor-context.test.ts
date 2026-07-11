@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildBudgetedActorPrompt, type ActorGroundedContext } from "@/core/promptBuilder";
+import { resolveActivityFreshness } from "@/core/actorContextPolicy";
 import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
 
 function grounded(): ActorGroundedContext {
@@ -126,4 +127,23 @@ test("Actor prompt names Beijing wall time and renders schedule locally", () => 
   assert.doesNotMatch(result.prompt, /Observed Beijing time: .*T08:00:00/);
   assert.match(result.prompt, /下午工作: 13:00–18:00, Asia\/Shanghai/);
   assert.match(result.prompt, /World advanced through: 2026-07-11T15:45:00\+08:00/);
+});
+
+test("stale world state exposes only the last confirmed activity", () => {
+  const block = { id: "morning", title: "上午工作" };
+  const stale = resolveActivityFreshness({
+    schedule: [block],
+    currentScheduleBlockId: block.id,
+    worldStateFresh: false,
+  });
+  assert.equal(stale.currentActivity, undefined);
+  assert.equal(stale.lastConfirmedActivity, block);
+
+  const fresh = resolveActivityFreshness({
+    schedule: [block],
+    currentScheduleBlockId: block.id,
+    worldStateFresh: true,
+  });
+  assert.equal(fresh.currentActivity, block);
+  assert.equal(fresh.lastConfirmedActivity, undefined);
 });
