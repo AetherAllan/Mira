@@ -13,7 +13,7 @@ import {
   type GooglePlaceSearch,
   type GoogleRouteRequest,
 } from "@/world/providers/googleMaps";
-import { embedWithBgeM3 } from "@/world/providers/embedding";
+import { embedExternalInformation } from "@/world/providers/embedding";
 import { GdeltProvider } from "@/world/providers/gdelt";
 import { QWeatherProvider } from "@/world/providers/qweather";
 import type {
@@ -231,7 +231,7 @@ export async function ingestBeijingExternalInformation(
       : [],
   );
   const drafts = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-  const embeddings = await embedWithBgeM3(
+  const embeddings = await embedExternalInformation(
     drafts.map((draft) => `${draft.title}\n${draft.factualSummary}`),
     {
       companionId,

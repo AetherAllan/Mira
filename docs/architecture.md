@@ -95,7 +95,7 @@ Definite Telegram failures may follow bounded retry policy. A network timeout af
 - QWeather: 30-minute cache; GDELT: 2-hour cache.
 - Native fetch timeout and one retry for 429/5xx.
 - `Promise.allSettled` keeps one failed provider from blocking the world.
-- `baai/bge-m3` embeddings are batched and cached for external-information dedupe.
+- `nvidia/llama-nemotron-embed-vl-1b-v2:free` embeddings request 1024 dimensions and are batched for external-information dedupe.
 - `llm_usage_logs` records category, model, tokens, estimated cost, latency and fallback.
 
 Normal 15-minute ticks, emotion decay, schedules and event density use code, not LLM calls.

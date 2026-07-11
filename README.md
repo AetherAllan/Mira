@@ -186,7 +186,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron/daily
 - [Google Static Maps](https://developers.google.com/maps/documentation/maps-static/start)：仅后台服务端代理；客户端看不到 key。
 - QWeather：当前天气和预警，缓存 30 分钟；雨雪等风险只影响 12 小时内的日程。
 - GDELT：北京、本地生活、科技和游戏新闻候选，缓存 2 小时。
-- OpenRouter `baai/bge-m3`：1024 维外部信息去重 embedding。
+- OpenRouter `nvidia/llama-nemotron-embed-vl-1b-v2:free`：请求 1024 维输出，用于外部信息去重。
 
 新闻只保存 URL、标题、短摘要和结构化事实，不保存全文。Provider 通过 timeout、一次 429/5xx retry、TTL cache 和 `Promise.allSettled` 隔离故障。
 

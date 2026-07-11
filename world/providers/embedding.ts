@@ -6,12 +6,15 @@ interface EmbeddingResponse {
   usage?: { prompt_tokens?: number; total_tokens?: number; cost?: number };
 }
 
-export async function embedWithBgeM3(
+const EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free";
+const EMBEDDING_DIMENSIONS = 1024;
+
+export async function embedExternalInformation(
   texts: string[],
   usageContext?: LlmUsageContext,
 ): Promise<number[][] | null> {
   const startedAt = Date.now();
-  const model = "baai/bge-m3";
+  const model = EMBEDDING_MODEL;
   const log = (input: { usage?: EmbeddingResponse["usage"]; usedFallback: boolean; error?: string }) => {
     if (!usageContext) return Promise.resolve();
     return recordLlmUsage({
@@ -39,7 +42,9 @@ export async function embedWithBgeM3(
         "Content-Type": "application/json",
         "X-Title": "Mira",
       },
-      body: JSON.stringify({ model, input: texts }),
+      // The model defaults to 2048 dimensions. Keep the existing pgvector
+      // column stable by requesting its supported 1024-dimensional output.
+      body: JSON.stringify({ model, input: texts, dimensions: EMBEDDING_DIMENSIONS }),
       signal: AbortSignal.timeout(20_000),
     });
     if (!response.ok) {
@@ -52,7 +57,7 @@ export async function embedWithBgeM3(
       .filter((value): value is Record<string, unknown> => Boolean(value))
       .sort((left, right) => (asNumber(left.index) ?? 0) - (asNumber(right.index) ?? 0))
       .map((value) => asArray(value.embedding).filter((item): item is number => typeof item === "number"));
-    const valid = embeddings.length === texts.length && embeddings.every((item) => item.length === 1024);
+    const valid = embeddings.length === texts.length && embeddings.every((item) => item.length === EMBEDDING_DIMENSIONS);
     await log({ usage: body.usage, usedFallback: !valid, error: valid ? undefined : "Invalid embedding dimensions" });
     return valid
       ? embeddings
