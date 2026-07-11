@@ -20,6 +20,7 @@
     "seed": "bun scripts/seed.ts",
     "telegram:set-webhook": "bun scripts/set-telegram-webhook.ts",
     "cron:hourly": "bun scripts/run-cron.ts hourly",
+    "cron:hourly-daily": "bun scripts/run-cron.ts hourly-daily",
     "cron:daily": "bun scripts/run-cron.ts daily",
     "cron:world": "bun scripts/run-cron.ts world",
     "cron:outbox": "bun scripts/run-cron.ts outbox",

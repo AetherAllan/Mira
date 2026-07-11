@@ -159,14 +159,13 @@ railway run bun run seed
 
 `BASE_URL` 是 OpenRouter 地址，不是 Railway domain。健康检查为 `/api/health`。
 
-Railway cron 使用 UTC，创建四个独立 service，共享同一组数据库、Telegram、OpenRouter 和 provider 变量：
+Railway cron 使用 UTC。免费计划下使用三个独立 service，共享同一组数据库、Telegram、OpenRouter 和 provider 变量：
 
 | Service | UTC schedule | Beijing meaning | Start command |
 | --- | --- | --- | --- |
 | `mira-world` | `*/15 * * * *` | 每 15 分钟 | `bun run cron:world` |
 | `mira-outbox` | `*/5 * * * *` | 每 5 分钟补发可安全重试项 | `bun run cron:outbox` |
-| `mira-hourly` | `0 * * * *` | 每小时消费 share candidates | `bun run cron:hourly` |
-| `mira-daily` | `50 15 * * *` | 北京时间 23:50 | `bun run cron:daily` |
+| `mira-hourly` | `50 * * * *` | 每小时消费 share candidates；UTC 15:50 同进程追加 daily reflection | `bun run cron:hourly-daily` |
 
 Cron 进程直接调用 runtime 并在完成后退出。HTTP route 也可手动验收，但必须带 `CRON_SECRET`：
 
