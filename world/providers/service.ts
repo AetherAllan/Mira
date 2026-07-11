@@ -154,7 +154,7 @@ export async function ingestBeijingExternalInformation(
   correlationId: string,
   now = new Date(),
 ) {
-  const enabled = process.env.EXTERNAL_INGESTION_ENABLED !== "false";
+  const enabled = process.env.EXTERNAL_INGESTION_ENABLED === "true";
   if (!enabled) return {
     status: "disabled" as const,
     inserted: 0,

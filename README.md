@@ -72,7 +72,7 @@ flowchart LR
 | `TELEGRAM_WEBHOOK_SECRET` | yes | Webhook secret-token 校验 |
 | `CRON_SECRET` | yes | HTTP cron route 保护 |
 | `ADMIN_PASSWORD` | yes | Dashboard httpOnly cookie 登录 |
-| `EXTERNAL_INGESTION_ENABLED` | no | 公共天气、地图和新闻 ingestion 的运维开关，默认开启 |
+| `EXTERNAL_INGESTION_ENABLED` | no | 公共天气、地图和新闻 ingestion 的运维开关，默认关闭；生产显式设为 `true` |
 | `TEST_DATABASE_URL` | tests | 仅允许数据库名为 `mira_test` |
 
 不要给任何密钥添加 `NEXT_PUBLIC_` 前缀。公共地图 provider 不需要 key。
