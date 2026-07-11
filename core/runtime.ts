@@ -39,6 +39,10 @@ import {
 import { applyUserWorldSignals } from "@/db/interactionRepo";
 import { listActiveSharedKnowledge } from "@/db/interactionRepo";
 import {
+  hasWaitingProactiveReply,
+  resolveAwaitingReplies,
+} from "@/db/awaitingReplyRepo";
+import {
   claimShareCandidate,
   listPendingShareCandidates,
   markShareCandidateShared,
@@ -212,6 +216,38 @@ function toolCallWrite(execution: ToolExecution | null, reason: string) {
     argsJson: execution.args,
     resultJson: execution.ok ? execution.result : { error: execution.error },
     reason,
+  };
+}
+
+function awaitingReplyDraft(input: {
+  text: string;
+  messageKind: "reply" | "proactive";
+  userSaidBusy: boolean;
+  vulnerableDisclosure?: boolean;
+  userCommitment?: boolean;
+}) {
+  const explicitQuestion = /[?？]/.test(input.text);
+  const vulnerableDisclosure = input.vulnerableDisclosure ?? false;
+  return {
+    expectation: input.userCommitment
+      ? 0.75
+      : vulnerableDisclosure
+        ? 0.7
+        : explicitQuestion
+          ? 0.55
+          : 0.1,
+    emotionalWeight: input.userCommitment
+      ? 0.7
+      : vulnerableDisclosure
+        ? 0.7
+        : explicitQuestion
+          ? 0.4
+          : 0.1,
+    explicitQuestion,
+    vulnerableDisclosure,
+    userCommitment: input.userCommitment ?? false,
+    userSaidBusy: input.userSaidBusy,
+    messageKind: input.messageKind,
   };
 }
 
@@ -417,6 +453,14 @@ async function processTelegramMessage(
       resumed: !userMessage.created,
     },
   });
+  await resolveAwaitingReplies({
+    companionId: context.companion.id,
+    userMessageId: userMessage.row.id,
+    explanationProvided: /(?:忙|加班|开会|没看到|没来得及|睡着|抱歉|刚回来)/.test(
+      message.text,
+    ),
+    correlationId,
+  });
   const config = runtimeConfig(context);
   const analyzed = await analyzeMessage(message.text, config.model);
   if (!await renewMessageProcessing(userMessage.row.id, leaseToken)) {
@@ -604,6 +648,13 @@ async function processTelegramMessage(
       memoryCandidate,
       toolCall: toolCallWrite(acted.toolExecution, plan.reason),
       selectedSeedId: selectedSeed?.id,
+      awaitingReply: awaitingReplyDraft({
+        text: acted.finalText,
+        messageKind: "reply",
+        userSaidBusy: analyzed.analysis.worldSignals.some(
+          (signal) => signal.type === "user_busy",
+        ),
+      }),
     },
     (state) => applyInteractionGrowth(state, analyzed.analysis),
   );
@@ -694,12 +745,13 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     };
   }
 
-  const [stats, candidates, sharedKnowledge, recentMessages] =
+  const [stats, candidates, sharedKnowledge, recentMessages, unansweredProactive] =
     await Promise.all([
       getProactiveStats(context.companion.id, timeZone),
       listPendingShareCandidates(context.companion.id, now),
       listActiveSharedKnowledge(context.companion.id, now, 30),
       listRecentMessages(context.companion.id, 30),
+      hasWaitingProactiveReply(context.companion.id),
     ]);
   const userLikelyBusy = sharedKnowledge.some(
     (item) => item.subject === "用户当前可能忙碌",
@@ -714,7 +766,7 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
         miraIrritation: context.world.state.irritation,
         quietHours: isQuietHours(now, config.policy.quietHours),
         userLikelyBusy,
-        hasUnansweredProactive: false,
+        hasUnansweredProactive: unansweredProactive,
         dailySentCount: stats.sentToday,
         dailyLimit: config.policy.proactiveMaxPerDay,
         hoursSinceLastProactive: hoursSince(stats.lastSentAt, now),
@@ -853,6 +905,21 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
         memoryCandidate: null,
         toolCall: null,
         proactiveLogId: reservation.id,
+        awaitingReply: awaitingReplyDraft({
+          text: acted.finalText,
+          messageKind: "proactive",
+          userSaidBusy: false,
+          vulnerableDisclosure:
+            candidate.emotionalIntensity >= 0.65 && candidate.intimacy >= 0.5,
+          // `user_follow_up` also covers ordinary follow-ups and the single bounded
+          // dissatisfaction candidate. Only an explicit persisted commitment may
+          // receive the stronger "missed promise" consequence.
+          userCommitment:
+            candidate.sourceType === "user_follow_up" &&
+            /(?:用户承诺|user commitment)/i.test(
+              `${candidate.reasonToShare} ${candidate.contentSummary}`,
+            ),
+        }),
       },
       applyProactiveGrowth,
     );

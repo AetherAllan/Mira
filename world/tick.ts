@@ -10,6 +10,7 @@ import {
   listWorldCompanions,
   worldStateRowToDomain,
 } from "@/db/worldRepo";
+import { processAwaitingReplyTimeouts } from "@/db/awaitingReplyRepo";
 import { zonedDateKey } from "@/lib/time";
 import { DEFAULT_CHARACTER_PROFILE } from "@/seed/world";
 import {
@@ -20,7 +21,12 @@ import {
 import { evaluateTripFeasibility } from "@/world/feasibility";
 import { placeDistanceMeters } from "@/world/places";
 import { buildDailySchedule } from "@/world/planner";
-import { createSeededRandom, createWorldSeed, seededChoice } from "@/world/random";
+import {
+  createSeededRandom,
+  createWorldSeed,
+  deterministicUuid,
+  seededChoice,
+} from "@/world/random";
 import {
   getCompletedTickWindow,
   reduceOfflineGap,
@@ -49,6 +55,7 @@ type CompanionTickResult = {
   remainingWindows: number;
   status: "advanced" | "up_to_date" | "busy" | "failed";
   error?: string;
+  awaitingRepliesProcessed?: number;
 };
 
 function profileOrDefault(value: CharacterProfile | undefined) {
@@ -405,7 +412,15 @@ export async function runWorldTick(now = new Date()) {
   // avoids competing row locks and makes audit order deterministic.
   for (const companion of companions) {
     try {
-      results.push(await runCompanionTick(companion, completedEnd));
+      const result = await runCompanionTick(companion, completedEnd);
+      const awaiting = await processAwaitingReplyTimeouts(
+        companion.id,
+        completedEnd,
+        deterministicUuid(
+          createWorldSeed(companion.id, completedEnd.toISOString(), "awaiting-reply-tick"),
+        ),
+      );
+      results.push({ ...result, awaitingRepliesProcessed: awaiting.processed });
     } catch (error) {
       results.push({
         companionId: companion.id,

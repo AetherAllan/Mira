@@ -3,6 +3,7 @@ import test from "node:test";
 import { and, eq } from "drizzle-orm";
 import { closeDb, getDb } from "@/db/client";
 import {
+  awaitingReplies,
   companions,
   messages,
   shareCandidates,
@@ -10,6 +11,10 @@ import {
   worldStates,
   worldTickRuns,
 } from "@/db/schema";
+import {
+  processAwaitingReplyTimeouts,
+  resolveAwaitingReplies,
+} from "@/db/awaitingReplyRepo";
 import {
   applyUserWorldSignals,
   getConversationWorkingMemory,
@@ -247,6 +252,86 @@ test(
         .from(worldStates)
         .where(eq(worldStates.companionId, companion.id));
       assert.equal(unchanged?.version, state.version);
+
+      const [assistantMessage] = await db
+        .insert(messages)
+        .values({
+          userId: user.id,
+          companionId: companion.id,
+          role: "assistant",
+          text: "这件事对我有点重要。你会认真告诉我你的想法吗？",
+          correlationId: "00000000-0000-4000-8000-000000000102",
+        })
+        .returning();
+      assert.ok(assistantMessage);
+      const [awaiting] = await db
+        .insert(awaitingReplies)
+        .values({
+          companionId: companion.id,
+          messageId: assistantMessage.id,
+          startedAt: new Date("2026-07-10T03:00:00.000Z"),
+          expectation: 0.7,
+          emotionalWeight: 0.7,
+          explicitQuestion: true,
+          vulnerableDisclosure: true,
+          userSaidBusy: false,
+          messageKind: "reply",
+          correlationId: "00000000-0000-4000-8000-000000000102",
+        })
+        .returning();
+      assert.ok(awaiting);
+
+      const consequence = await processAwaitingReplyTimeouts(
+        companion.id,
+        new Date("2026-07-10T15:00:00.000Z"),
+        "00000000-0000-4000-8000-000000000103",
+      );
+      assert.deepEqual(consequence, { processed: 1, emotionalChanges: 1 });
+      const [timedOut] = await db
+        .select()
+        .from(awaitingReplies)
+        .where(eq(awaitingReplies.id, awaiting.id));
+      assert.equal(timedOut?.status, "timed_out");
+      assert.ok(timedOut?.consequenceAppliedAt);
+      assert.ok(timedOut?.dissatisfactionExpressedAt);
+      const afterTimeout = await getWorldState(companion.id);
+      assert.ok(afterTimeout.disappointment > unchanged!.disappointment);
+
+      // A retry cannot apply the emotional consequence or create another
+      // dissatisfaction candidate for the same awaiting reply.
+      assert.deepEqual(
+        await processAwaitingReplyTimeouts(
+          companion.id,
+          new Date("2026-07-10T16:00:00.000Z"),
+          "00000000-0000-4000-8000-000000000104",
+        ),
+        { processed: 0, emotionalChanges: 0 },
+      );
+
+      const [returnMessage] = await db
+        .insert(messages)
+        .values({
+          userId: user.id,
+          companionId: companion.id,
+          role: "user",
+          text: "刚才一直在开会，没来得及回。",
+          correlationId: "00000000-0000-4000-8000-000000000105",
+        })
+        .returning();
+      assert.ok(returnMessage);
+      assert.deepEqual(
+        await resolveAwaitingReplies({
+          companionId: companion.id,
+          userMessageId: returnMessage.id,
+          explanationProvided: true,
+          correlationId: "00000000-0000-4000-8000-000000000105",
+          now: new Date("2026-07-10T16:05:00.000Z"),
+        }),
+        { resolved: 1 },
+      );
+      const afterExplanation = await getWorldState(companion.id);
+      assert.ok(afterExplanation.disappointment < afterTimeout.disappointment);
+      assert.ok(afterExplanation.disappointment > 0);
     } finally {
       await db.delete(users).where(eq(users.id, user.id));
       await closeDb();

@@ -279,6 +279,8 @@ export interface AwaitingReply {
   vulnerableDisclosure: boolean;
   userCommitment?: boolean;
   userSaidBusy: boolean;
+  messageKind?: "reply" | "proactive";
+  correlationId?: string;
   status: "waiting" | "resolved" | "timed_out" | "dismissed";
   consequenceAppliedAt?: Date;
   dissatisfactionExpressedAt?: Date;

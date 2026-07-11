@@ -11,6 +11,7 @@ import {
 import type { CompanionState, MemoryCandidate, MessageAnalysis } from "@/core/types";
 import { getDb } from "@/db/client";
 import {
+  awaitingReplies,
   companionStates,
   events,
   memories,
@@ -64,6 +65,16 @@ export interface EnqueueAssistantInput {
   toolCall?: ToolCallWrite | null;
   selectedSeedId?: string | null;
   proactiveLogId?: string | null;
+  awaitingReply?: {
+    expectation: number;
+    emotionalWeight: number;
+    explicitQuestion: boolean;
+    vulnerableDisclosure: boolean;
+    userCommitment?: boolean;
+    userSaidBusy: boolean;
+    messageKind: "reply" | "proactive";
+    expectedAt?: Date;
+  } | null;
 }
 
 class StateConflictError extends Error {}
@@ -176,6 +187,22 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
         novelty: input.annotation.novelty,
         summary: input.annotation.summary,
       });
+
+      if (input.awaitingReply) {
+        await tx.insert(awaitingReplies).values({
+          companionId: input.companionId,
+          messageId: message.id,
+          expectedAt: input.awaitingReply.expectedAt,
+          expectation: input.awaitingReply.expectation,
+          emotionalWeight: input.awaitingReply.emotionalWeight,
+          explicitQuestion: input.awaitingReply.explicitQuestion,
+          vulnerableDisclosure: input.awaitingReply.vulnerableDisclosure,
+          userCommitment: input.awaitingReply.userCommitment ?? false,
+          userSaidBusy: input.awaitingReply.userSaidBusy,
+          messageKind: input.awaitingReply.messageKind,
+          correlationId: input.correlationId,
+        });
+      }
 
       if (input.memoryCandidate) {
         const [memory] = await tx

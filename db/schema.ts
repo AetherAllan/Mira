@@ -644,6 +644,55 @@ export const shareCandidates = pgTable(
   ],
 );
 
+export const awaitingReplies = pgTable(
+  "awaiting_replies",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => messages.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    expectedAt: timestamp("expected_at", { withTimezone: true }),
+    expectation: real("expectation").notNull(),
+    emotionalWeight: real("emotional_weight").notNull(),
+    explicitQuestion: boolean("explicit_question").notNull().default(false),
+    vulnerableDisclosure: boolean("vulnerable_disclosure").notNull().default(false),
+    userCommitment: boolean("user_commitment").notNull().default(false),
+    userSaidBusy: boolean("user_said_busy").notNull().default(false),
+    messageKind: text("message_kind", { enum: ["reply", "proactive"] }).notNull(),
+    status: text("status", { enum: ["waiting", "resolved", "timed_out", "dismissed"] })
+      .notNull()
+      .default("waiting"),
+    consequenceAppliedAt: timestamp("consequence_applied_at", { withTimezone: true }),
+    dissatisfactionExpressedAt: timestamp("dissatisfaction_expressed_at", {
+      withTimezone: true,
+    }),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedByMessageId: uuid("resolved_by_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    correlationId: uuid("correlation_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("awaiting_replies_message_idx").on(table.messageId),
+    index("awaiting_replies_companion_status_started_idx").on(
+      table.companionId,
+      table.status,
+      table.startedAt,
+    ),
+    index("awaiting_replies_companion_kind_status_idx").on(
+      table.companionId,
+      table.messageKind,
+      table.status,
+    ),
+  ],
+);
+
 export const worldTickRuns = pgTable(
   "world_tick_runs",
   {
@@ -888,5 +937,6 @@ export type SharedKnowledgeRow = typeof sharedKnowledge.$inferSelect;
 export type ConversationWorkingMemoryRow = typeof conversationWorkingMemories.$inferSelect;
 export type InnerThoughtRow = typeof innerThoughts.$inferSelect;
 export type ShareCandidateRow = typeof shareCandidates.$inferSelect;
+export type AwaitingReplyRow = typeof awaitingReplies.$inferSelect;
 export type WorldTickRunRow = typeof worldTickRuns.$inferSelect;
 export type ProposedWorldMutationRow = typeof proposedWorldMutations.$inferSelect;
