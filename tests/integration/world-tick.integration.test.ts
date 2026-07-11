@@ -334,7 +334,9 @@ test(
           },
         ],
       });
-      assert.deepEqual(externalWrite, { inserted: 2, duplicates: 1 });
+      assert.equal(externalWrite.inserted, 2);
+      assert.equal(externalWrite.duplicates, 1);
+      assert.equal(externalWrite.insertedFacts.length, 1);
       const externalRows = await db
         .select({ status: externalInformation.status })
         .from(externalInformation)

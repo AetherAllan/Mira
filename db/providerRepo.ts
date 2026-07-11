@@ -22,6 +22,20 @@ export interface ExternalFactDraft {
   embedding?: number[];
 }
 
+export interface PersistedExternalFact {
+  id: string;
+  companionId: string;
+  title: string;
+  factualSummary: string;
+  category: string;
+  personalRelevance: number;
+  reliability: number;
+  novelty: number;
+  fetchedAt: Date;
+  expiresAt?: Date;
+  correlationId: string;
+}
+
 function normalizeUrl(value: string | undefined) {
   if (!value) return undefined;
   try {
@@ -263,6 +277,7 @@ export async function persistExternalFacts(input: {
     .limit(200);
   let inserted = 0;
   let duplicates = 0;
+  const insertedFacts: PersistedExternalFact[] = [];
 
   for (const draft of input.drafts) {
     const sourceUrl = normalizeUrl(draft.sourceUrl);
@@ -314,6 +329,21 @@ export async function persistExternalFacts(input: {
       continue;
     }
     inserted += 1;
+    if (!duplicate) {
+      insertedFacts.push({
+        id: row.id,
+        companionId: input.companionId,
+        title: draft.title,
+        factualSummary: draft.factualSummary,
+        category: draft.category,
+        personalRelevance: draft.personalRelevance,
+        reliability: draft.reliability,
+        novelty: draft.novelty,
+        fetchedAt: input.fetchedAt,
+        expiresAt: draft.expiresAt,
+        correlationId: input.correlationId,
+      });
+    }
     if (duplicate) duplicates += 1;
     recent.unshift({
       id: row.id,
@@ -323,7 +353,7 @@ export async function persistExternalFacts(input: {
       duplicateGroupId: duplicate?.duplicateGroupId ?? duplicate?.id ?? null,
     });
   }
-  return { inserted, duplicates };
+  return { inserted, duplicates, insertedFacts };
 }
 
 export function persistWebCitations(input: {

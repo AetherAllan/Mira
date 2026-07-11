@@ -101,6 +101,11 @@ Definite Telegram failures may follow bounded retry policy. A network timeout af
 
 Normal 15-minute ticks, emotion decay, schedules and event density use code, not LLM calls.
 
+GDELT social and Beijing headlines first become sourced `ExternalInformation`. Only novel,
+reliable, personally relevant rows may create an `InnerThought`, and at most two candidates
+are admitted per ingestion run. Their share priority is below lived world events, so a hot
+topic can shape Mira's view without turning her into a news feed.
+
 ## Migration and rollback
 
 Migrations are additive. Each new-schema migration has a matching `drizzle/down/*.down.sql` for disposable `mira_test` verification. Production rollback order:

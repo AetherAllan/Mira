@@ -184,6 +184,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://YOUR_DOMAIN/api/cron/daily
 - OpenRouter `nvidia/llama-nemotron-embed-vl-1b-v2:free`：请求 1024 维输出，用于外部信息去重。
 
 新闻只保存 URL、标题、短摘要和结构化事实，不保存全文。Provider 通过 timeout、一次 429/5xx retry、TTL cache 和 `Promise.allSettled` 隔离故障。
+可靠、新颖且符合 Mira 兴趣的社会热点会先生成可审计的 `InnerThought`，每轮最多两条；它们的分享优先级低于真实生活事件，不会直接变成新闻播报。
 
 ## Dashboard
 

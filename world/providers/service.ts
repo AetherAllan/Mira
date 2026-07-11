@@ -8,6 +8,7 @@ import {
 } from "@/db/providerRepo";
 import { events } from "@/db/schema";
 import { getDb } from "@/db/client";
+import { persistExternalThoughtCandidates } from "@/db/externalThoughtRepo";
 import { embedExternalInformation } from "@/world/providers/embedding";
 import { GdeltProvider } from "@/world/providers/gdelt";
 import { OpenMeteoProvider } from "@/world/providers/openMeteo";
@@ -206,6 +207,9 @@ export async function ingestBeijingExternalInformation(
   );
   if (embeddings) drafts.forEach((draft, index) => { draft.embedding = embeddings[index]; });
   const persisted = await persistExternalFacts({ companionId, drafts, fetchedAt: now, correlationId });
+  const thoughtResult = await persistExternalThoughtCandidates(persisted.insertedFacts).catch(
+    () => ({ inserted: 0 }),
+  );
   const weatherFacts = drafts.filter((draft) => draft.category.startsWith("weather"));
   const weatherRisk = weatherFacts.some((draft) => draft.category === "weather_warning")
     ? 1
@@ -218,11 +222,19 @@ export async function ingestBeijingExternalInformation(
     type: "external_information.ingested",
     source: "world.provider",
     correlationId,
-    payloadJson: { ...persisted, failures, candidateCount: drafts.length },
+    payloadJson: {
+      inserted: persisted.inserted,
+      duplicates: persisted.duplicates,
+      thoughtCount: thoughtResult.inserted,
+      failures,
+      candidateCount: drafts.length,
+    },
   });
   return {
     status: "completed" as const,
-    ...persisted,
+    inserted: persisted.inserted,
+    duplicates: persisted.duplicates,
+    thoughtCount: thoughtResult.inserted,
     failures,
     weatherRisk,
     weatherSummary: weatherFacts[0]?.factualSummary ?? null,
