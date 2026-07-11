@@ -39,7 +39,7 @@ import {
   INITIAL_BEIJING_PLACES,
   INITIAL_WORLD_CHARACTERS,
 } from "@/seed/world";
-import { getTickWindow } from "@/world/reducer";
+import { getCompletedTickWindow } from "@/world/reducer";
 import type { WorldTickResult } from "@/world/reducer";
 import type { ScheduleBlock, WorldEvent, WorldState } from "@/world/types";
 import { buildThoughtAndShareCandidate } from "@/world/thoughts";
@@ -283,7 +283,11 @@ export async function ensurePersistentWorld(
 
   const db = getDb();
   const seedRows = buildPersistentWorldSeedRows(companionId, now);
-  const { windowStart } = getTickWindow(now);
+  // Start one completed window behind. The first cron (or chat catch-up) then
+  // performs a real reducer step that creates today's schedule and grounds the
+  // current activity. Starting at the open window made a new world look fresh
+  // while it had no schedule at all.
+  const { windowStart } = getCompletedTickWindow(now);
 
   await db.transaction(async (tx) => {
     await tx

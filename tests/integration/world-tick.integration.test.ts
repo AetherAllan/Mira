@@ -466,7 +466,7 @@ test(
       assert.equal(state.lastWorldTickAt.toISOString(), "2026-07-10T02:15:00.000Z");
       // A deterministic ordinary event may add one more version increment for
       // its emotional consequence; the tick window itself still commits once.
-      assert.ok(state.version === 1 || state.version === 2);
+      assert.ok(state.version >= 2 && state.version <= 4);
       const actorContext = await buildActorGroundedContext({
         companionId: companion.id,
         config: DEFAULT_RUNTIME_CONFIG,
@@ -514,8 +514,8 @@ test(
         .select()
         .from(worldTickRuns)
         .where(eq(worldTickRuns.companionId, companion.id));
-      assert.equal(completedRuns.length, 1);
-      assert.equal(completedRuns[0]?.status, "completed");
+      assert.equal(completedRuns.length, 2);
+      assert.ok(completedRuns.every((run) => run.status === "completed"));
 
       const windowStart = state.lastWorldTickAt;
       const windowEnd = new Date(windowStart.getTime() + 15 * 60_000);
