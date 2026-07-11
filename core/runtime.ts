@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type {
   ActionPlan,
   CompanionState,
@@ -37,6 +37,7 @@ import {
   type EnqueueAssistantInput,
 } from "@/db/messageOutboxRepo";
 import { applyUserWorldSignals } from "@/db/interactionRepo";
+import { persistWebCitations } from "@/db/providerRepo";
 import { listActiveSharedKnowledge } from "@/db/interactionRepo";
 import {
   hasWaitingProactiveReply,
@@ -51,8 +52,11 @@ import {
 } from "@/db/shareRepo";
 import { logRuntimeEvent } from "@/core/eventLog";
 import {
+  buildActorGroundedContext,
+  savePromptContextSnapshot,
+} from "@/core/actorContext";
+import {
   computeMirrorIndex,
-  computeProactiveScore,
   computeRepetitionScore,
   computeTopicEntropy,
   isEchoReply,
@@ -77,6 +81,7 @@ import {
 import { selectNoveltySeed } from "@/psyche/noveltyEngine";
 import { drainTelegramOutbox } from "@/messaging/outbox";
 import { scoreShareCandidate } from "@/world/share";
+import { validateActorGrounding } from "@/world/grounding";
 import { createSeededRandom, createWorldSeed } from "@/world/random";
 import type { TelegramTextMessage } from "@/telegram/webhook";
 import { executeTool, TOOL_REGISTRY, type ToolExecution } from "@/tools/registry";
@@ -89,6 +94,9 @@ interface ActorResult {
   actorOutput: Awaited<ReturnType<typeof act>>["output"];
   actorRaw: unknown;
   toolExecution: ToolExecution | null;
+  citations: Awaited<ReturnType<typeof act>>["citations"];
+  promptDebug: Awaited<ReturnType<typeof act>>["promptDebug"];
+  grounding: ReturnType<typeof validateActorGrounding>;
 }
 
 const SAFETY_REPLY =
@@ -125,27 +133,6 @@ function toSeed(row: {
     enabled: row.enabled ?? true,
     usedCount: row.usedCount ?? 0,
     lastUsedAt: row.lastUsedAt ?? null,
-  };
-}
-
-function annotationAnalysis(annotation: Record<string, unknown> | undefined): MessageAnalysis {
-  const topics = Array.isArray(annotation?.topicsJson)
-    ? annotation.topicsJson.filter(
-        (topic): topic is { name: string; confidence: number } =>
-          Boolean(topic) &&
-          typeof topic === "object" &&
-          typeof (topic as { name?: unknown }).name === "string" &&
-          typeof (topic as { confidence?: unknown }).confidence === "number",
-      )
-    : [{ name: "daily_life", confidence: 0.5 }];
-  return {
-    topics,
-    emotion: typeof annotation?.emotion === "string" ? annotation.emotion : "neutral",
-    intent: typeof annotation?.intent === "string" ? annotation.intent : "conversation",
-    importance: typeof annotation?.importance === "number" ? annotation.importance : 0.5,
-    novelty: typeof annotation?.novelty === "number" ? annotation.novelty : 0.5,
-    summary: typeof annotation?.summary === "string" ? annotation.summary : "",
-    worldSignals: [],
   };
 }
 
@@ -200,13 +187,6 @@ function buildAssistantAnnotation(
     summary: input.text.length > 120 ? `${input.text.slice(0, 117)}...` : input.text,
     worldSignals: [],
   } satisfies MessageAnalysis;
-}
-
-function deterministicRoll(...parts: Array<string | number | Date>) {
-  const input = parts
-    .map((part) => (part instanceof Date ? part.toISOString() : String(part)))
-    .join(":");
-  return createHash("sha256").update(input).digest().readUInt32BE(0) / 0x1_0000_0000;
 }
 
 function toolCallWrite(execution: ToolExecution | null, reason: string) {
@@ -276,35 +256,75 @@ function composeToolResult(message: string, execution: ToolExecution | null): st
     : message;
 }
 
-// The Actor output goes straight out. Crisis handling still short-circuits earlier,
-// and tool names remain constrained by the registry.
+// Actor prose is not a world-authority boundary. It gets one grounded rewrite,
+// then a deterministic fallback; tool names remain constrained by the registry.
 async function runActor(input: Parameters<typeof act>[0]): Promise<ActorResult> {
   const recentAssistant = (input.recentMessages ?? [])
     .filter((item) => item.role === "assistant")
     .map((item) => item.text);
 
   let actor = await act(input);
-  if (isEchoReply(actor.output.message, recentAssistant)) {
+  const validationContext = () => {
+    if (!input.groundedContext || actor.citations.length === 0) return input.groundedContext;
+    const citationFacts = actor.citations.map((citation) => ({
+      id: citation.url,
+      sourceName: "OpenRouter web search",
+      sourceUrl: citation.url,
+      title: citation.title,
+      factualSummary: citation.content,
+    }));
+    return {
+      ...input.groundedContext,
+      externalInformation: [...input.groundedContext.externalInformation, ...citationFacts],
+      allowedReferenceIds: [
+        ...input.groundedContext.allowedReferenceIds,
+        ...actor.citations.map((citation) => citation.url),
+      ],
+    };
+  };
+  let grounding = validateActorGrounding(actor.output, validationContext());
+  if (isEchoReply(actor.output.message, recentAssistant) || !grounding.valid) {
     actor = await act({
       ...input,
       cooldownWarnings: [
         ...input.cooldownWarnings,
-        "FORBIDDEN: do not reuse any prior coding/bot/接口 reply. Answer only the latest user message.",
+        ...(isEchoReply(actor.output.message, recentAssistant)
+          ? ["FORBIDDEN: do not reuse a prior reply. Answer only the latest user message."]
+          : []),
+        ...(!grounding.valid
+          ? [`Grounding failed (${grounding.reasons.join(", ")}). Use only allowed IDs; proposedWorldMutation must be null.`]
+          : []),
       ],
     });
+    grounding = validateActorGrounding(actor.output, validationContext());
   }
-  // ponytail: if the model still echoes, refuse to send the loop — acknowledge the user text instead
-  if (isEchoReply(actor.output.message, recentAssistant)) {
+  if (isEchoReply(actor.output.message, recentAssistant) || !grounding.valid) {
     const tip = (input.userMessage ?? "").trim().slice(0, 80) || "你刚说的那句";
+    const candidate = input.groundedContext?.shareCandidate;
+    const candidateRef = typeof candidate?.sourceId === "string" ? candidate.sourceId : null;
+    const candidateType = candidate?.sourceType === "world_event"
+      ? "world"
+      : candidate?.sourceType === "external_information"
+        ? "external"
+        : "opinion";
     actor = {
       ...actor,
       output: {
         ...actor.output,
-        message: `嗯，我听到了：${tip}\n你希望我现在问你哪一块？`,
+        message: input.plan.action === "proactive_message"
+          ? (input.groundedContext?.shareCandidate?.contentSummary as string | undefined) ?? "有件事我想等信息更确定一点再说。"
+          : `嗯，我听到了：${tip}\n这次我只说能确定的部分。`,
+        factClaims: candidateRef
+          ? [{ type: candidateType, sourceRefs: candidateType === "opinion" ? [] : [candidateRef] }]
+          : [],
+        groundingRefs: candidateRef && candidateType !== "opinion" ? [candidateRef] : [],
+        proposedWorldMutation: null,
         toolCall: null,
       },
       raw: actor.raw,
+      citations: [],
     };
+    grounding = { valid: true, reasons: ["deterministic_grounded_fallback"] };
   }
 
   const toolExecution = actor.output.toolCall ? await executeTool(actor.output.toolCall) : null;
@@ -313,6 +333,9 @@ async function runActor(input: Parameters<typeof act>[0]): Promise<ActorResult> 
     actorOutput: actor.output,
     actorRaw: actor.raw,
     toolExecution,
+    citations: actor.citations,
+    promptDebug: actor.promptDebug,
+    grounding,
   };
 }
 
@@ -588,6 +611,13 @@ async function processTelegramMessage(
     payloadJson: { ...plan, usedFallback: directed.usedFallback, error: directed.error },
   });
 
+  const groundedContext = await buildActorGroundedContext({
+    companionId: context.companion.id,
+    config,
+    state: context.state,
+    currentMessageId: userMessage.row.id,
+    memories: selectedMemories,
+  });
   const acted = await runActor({
     config,
     state: context.state,
@@ -606,10 +636,26 @@ async function processTelegramMessage(
     recentMessages: recentMessages
       .filter((item) => item.id !== userMessage.row.id)
       .map((item) => ({ role: item.role, text: item.text })),
+    groundedContext,
   });
   if (!await renewMessageProcessing(userMessage.row.id, leaseToken)) {
     throw new Error("Telegram processing lease expired during actor generation");
   }
+  await Promise.all([
+    savePromptContextSnapshot({
+      companionId: context.companion.id,
+      correlationId,
+      messageId: userMessage.row.id,
+      purpose: "reply",
+      ...acted.promptDebug,
+    }),
+    persistWebCitations({
+      companionId: context.companion.id,
+      citations: acted.citations,
+      fetchedAt: new Date(),
+      correlationId,
+    }),
+  ]);
   const memoryCandidate = shouldStoreMemory(
     acted.actorOutput.memoryCandidate,
     config.policy.memoryWriteThreshold,
@@ -626,6 +672,10 @@ async function processTelegramMessage(
       rawJson: {
         actionPlan: plan,
         actorRaw: acted.actorRaw,
+        actorFactClaims: acted.actorOutput.factClaims,
+        actorGroundingRefs: acted.actorOutput.groundingRefs,
+        groundingValidation: acted.grounding,
+        webCitations: acted.citations,
         selectedMemories: selectedMemories.map((memory) => memory.id),
         selectedSeed,
         topicEntropy,
@@ -834,6 +884,7 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     noveltyBudget: "none",
     selectedSeed,
     toolAllowed: false,
+    webAccess: "none",
     styleHints: ["short", "specific", "grounded in the selected persisted event"],
     reason: `${candidate.reasonToShare}; score=${selected.evaluation.score.toFixed(3)}`,
   };
@@ -852,6 +903,22 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     analysis,
     2,
   );
+  const reservation = existingCheck ?? await writeProactiveLog(context, {
+    shouldSend: true,
+    reason: `Reserved persisted candidate ${candidate.id}`,
+    selectedMode: plan.mode,
+    selectedSeedJson: selectedSeed,
+    idempotencyKey,
+    score: selected.evaluation.score,
+  });
+  const groundedContext = await buildActorGroundedContext({
+    companionId: context.companion.id,
+    config,
+    state: context.state,
+    shareCandidateId: candidate.id,
+    memories: selectedMemories,
+    now,
+  });
   const acted = await runActor({
     config,
     state: context.state,
@@ -862,19 +929,25 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     analysis,
     userMessage: null,
     recentMessages: recentMessages.map((message) => ({ role: message.role, text: message.text })),
+    groundedContext,
   });
+  await Promise.all([
+    savePromptContextSnapshot({
+      companionId: context.companion.id,
+      correlationId: reservation.id,
+      purpose: "proactive",
+      ...acted.promptDebug,
+    }),
+    persistWebCitations({
+      companionId: context.companion.id,
+      citations: acted.citations,
+      fetchedAt: now,
+      correlationId: reservation.id,
+    }),
+  ]);
   const chatId =
     recentMessages.find((message) => message.role === "user" && message.chatId)?.chatId ??
     context.user.telegramUserId;
-  const reservation = existingCheck ?? await writeProactiveLog(context, {
-    shouldSend: true,
-    reason: `Reserved persisted candidate ${candidate.id}`,
-    selectedMode: plan.mode,
-    selectedSeedJson: selectedSeed,
-    idempotencyKey,
-    score: selected.evaluation.score,
-  });
-
   try {
     const assistant = await enqueueWithStateRetry(
       context.companion.id,
@@ -887,6 +960,10 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
           proactive: true,
           actionPlan: plan,
           actorRaw: acted.actorRaw,
+          actorFactClaims: acted.actorOutput.factClaims,
+          actorGroundingRefs: acted.actorOutput.groundingRefs,
+          groundingValidation: acted.grounding,
+          webCitations: acted.citations,
           shareCandidateId: candidate.id,
           groundingSourceId: candidate.sourceId,
           score: selected.evaluation.score,
@@ -962,295 +1039,6 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
       error instanceof Error ? error.message : "proactive enqueue failed",
       now,
     ).catch(() => false);
-    throw error;
-  }
-}
-
-export async function runLegacyHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
-  const context = await primaryContext();
-  const config = runtimeConfig(context);
-  const timeZone = config.policy.quietHours.timeZone;
-  const windowStart = new Date(now);
-  windowStart.setUTCMinutes(0, 0, 0);
-  const idempotencyKey = `hourly:${context.companion.id}:${windowStart.toISOString()}`;
-  const existingCheck = await findProactiveLogByIdempotencyKey(idempotencyKey);
-  if (existingCheck && (!existingCheck.shouldSend || existingCheck.sentMessageId)) {
-    return {
-      sent: Boolean(existingCheck.sentMessageId),
-      reason: "already_checked",
-      score: existingCheck.score ?? undefined,
-      messageId: existingCheck.sentMessageId ?? undefined,
-    };
-  }
-  const [
-    stats,
-    recentMessages,
-    recentAnnotations,
-    seedRows,
-    availableMemories,
-    toolCallsToday,
-    photoToolStats,
-  ] =
-    await Promise.all([
-      getProactiveStats(context.companion.id, timeZone),
-      listRecentMessages(context.companion.id, 40),
-      listRecentAnnotations(context.companion.id, 50),
-      listEnabledSeeds(context.companion.id),
-      listAvailableMemories(context.companion.id, 60),
-      countTodayToolCalls(context.companion.id, timeZone),
-      getToolStats(context.companion.id, "generate_fake_photo", timeZone),
-    ]);
-  const topicEntropy = computeTopicEntropy(recentAnnotations);
-  const mirrorIndex = computeMirrorIndex(
-    userTopicNames(recentAnnotations),
-    proactiveTags(recentMessages),
-  );
-  const scoreRoll = deterministicRoll(idempotencyKey, "score");
-  const intervalRoll = deterministicRoll(idempotencyKey, "interval");
-  const thresholdRoll = deterministicRoll(idempotencyKey, "threshold");
-  const seedRoll = deterministicRoll(idempotencyKey, "seed-use");
-  const seedSelectionRoll = deterministicRoll(idempotencyKey, "seed-selection");
-  const score = computeProactiveScore(context.state, scoreRoll, topicEntropy, mirrorIndex);
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "system.tick",
-    source: "cron.hourly",
-    payloadJson: {
-      at: now.toISOString(),
-      score,
-      randomSeed: idempotencyKey,
-      rolls: { scoreRoll, intervalRoll, thresholdRoll, seedRoll, seedSelectionRoll },
-      topicEntropy,
-      mirrorIndex,
-      noveltyBoost: (topicEntropy.collapseRisk ? 0.045 : 0) + (mirrorIndex > 0.8 ? 0.045 : 0),
-    },
-  });
-
-  if (isQuietHours(now, config.policy.quietHours)) {
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: "Quiet hours: knowing when not to act is part of the policy",
-      quietHoursBlocked: true,
-      idempotencyKey,
-      score,
-    });
-    return { sent: false, reason: "quiet_hours", score };
-  }
-  const reservedByThisWindow = existingCheck?.shouldSend ? 1 : 0;
-  if (stats.sentToday - reservedByThisWindow >= config.policy.proactiveMaxPerDay) {
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: "Daily proactive limit reached",
-      dailyLimitBlocked: true,
-      idempotencyKey,
-      score,
-    });
-    return { sent: false, reason: "daily_limit", score };
-  }
-  if (
-    !existingCheck &&
-    hoursSince(stats.lastSentAt, now) < config.policy.minimumProactiveIntervalHours + intervalRoll * 2
-  ) {
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: "Minimum proactive interval has not elapsed",
-      intervalBlocked: true,
-      idempotencyKey,
-      score,
-    });
-    return { sent: false, reason: "minimum_interval", score };
-  }
-  const scoreThreshold = 0.5 + thresholdRoll * 0.14;
-  if (score < scoreThreshold) {
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: "Drive, relationship and random jitter did not justify an interruption",
-      idempotencyKey,
-      score,
-    });
-    return { sent: false, reason: "score_below_threshold", score, scoreThreshold };
-  }
-  const latestAnnotation = recentAnnotations.find((item) => item.messageRole === "user") as
-    | (Record<string, unknown> & { messageRole?: string })
-    | undefined;
-  const analysis = annotationAnalysis(latestAnnotation);
-  const repetitionScore = computeRepetitionScore(
-    recentMessages.filter((message) => message.role === "assistant").slice(0, 10),
-  );
-  const seeds = seedRows.map(toSeed);
-  const selectedSeed = selectNoveltySeed(seeds, {
-    state: context.state,
-    analysis,
-    mirrorIndex,
-    required: true,
-    random: seedRoll,
-    selectionRandom: seedSelectionRoll,
-    now,
-  });
-  if (!selectedSeed) {
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: "No enabled novelty seed is available",
-      idempotencyKey,
-      score,
-    });
-    return { sent: false, reason: "no_seed", score };
-  }
-  const latestUserText = recentMessages.find((message) => message.role === "user")?.text ?? "";
-  const selectedMemories = selectRelevantMemories(
-    availableMemories,
-    latestUserText,
-    analysis,
-    2,
-  );
-  if (selectedMemories.length) {
-    await useMemories(selectedMemories.map((memory) => memory.id), timeZone);
-  }
-  const driveAssessment = assessDrives(context.state, analysis);
-  const directed = await directAction({
-    kind: "proactive",
-    state: context.state,
-    analysis,
-    memories: selectedMemories,
-    selectedSeed,
-    driveAssessment,
-    topicEntropy,
-    repetitionScore,
-    mirrorIndex,
-    config,
-  });
-  const photoCooldownBlocked =
-    hoursSince(photoToolStats.lastUsedAt, now) < TOOL_REGISTRY.generate_fake_photo.cooldownHours;
-  const plan: ActionPlan = {
-    ...directed.plan,
-    toolAllowed:
-      directed.plan.toolAllowed &&
-      toolCallsToday < config.policy.toolDailyLimit &&
-      !photoCooldownBlocked,
-  };
-  await logRuntimeEvent({
-    userId: context.user.id,
-    companionId: context.companion.id,
-    type: "psyche.ego.plan",
-    source: "ego.proactive",
-    payloadJson: { ...plan, score, usedFallback: directed.usedFallback, error: directed.error },
-  });
-  if (plan.action === "do_nothing") {
-    await writeProactiveLog(context, {
-      shouldSend: false,
-      reason: plan.reason,
-      selectedMode: plan.mode,
-      selectedSeedJson: selectedSeed,
-      idempotencyKey,
-      score,
-    });
-    return { sent: false, reason: "ego_do_nothing", score };
-  }
-
-  const acted = await runActor({
-    config,
-    state: context.state,
-    plan,
-    memories: selectedMemories,
-    selectedSeed,
-    cooldownWarnings: [
-      ...memoryCooldownWarnings(selectedMemories),
-      ...(toolCallsToday >= config.policy.toolDailyLimit ? ["Daily tool limit reached; no tool call is allowed."] : []),
-      ...(photoCooldownBlocked
-        ? [`generate_fake_photo is in its ${TOOL_REGISTRY.generate_fake_photo.cooldownHours}h cooldown.`]
-        : []),
-    ],
-    analysis,
-    userMessage: null,
-    recentMessages: recentMessages.map((message) => ({ role: message.role, text: message.text })),
-  });
-
-  const chatId = recentMessages.find((message) => message.role === "user" && message.chatId)?.chatId ?? context.user.telegramUserId;
-  // The database reservation is the cross-process lock for this hourly window.
-  const reservation = existingCheck ?? await writeProactiveLog(context, {
-    shouldSend: true,
-    reason: `Reserved before enqueue: ${plan.reason}`,
-    selectedMode: plan.mode,
-    selectedSeedJson: selectedSeed,
-    idempotencyKey,
-    score,
-  });
-  try {
-    const memoryCandidate = shouldStoreMemory(
-      acted.actorOutput.memoryCandidate,
-      config.policy.memoryWriteThreshold,
-    )
-      ? acted.actorOutput.memoryCandidate
-      : null;
-    const assistant = await enqueueWithStateRetry(
-      context.companion.id,
-      {
-        userId: context.user.id,
-        companionId: context.companion.id,
-        chatId,
-        text: acted.finalText,
-        rawJson: {
-          proactive: true,
-          actionPlan: plan,
-          actorRaw: acted.actorRaw,
-          selectedSeed,
-          selectedMemories: selectedMemories.map((memory) => memory.id),
-          score,
-          topicEntropy,
-          mirrorIndex,
-          randomSeed: idempotencyKey,
-        },
-        correlationId: reservation.id,
-        sourceType: "proactive",
-        sourceId: reservation.id,
-        idempotencyBase: `proactive:${reservation.id}`,
-        annotation: buildAssistantAnnotation({
-          text: acted.finalText,
-          plan,
-          analysis,
-          selectedSeed,
-          proactive: true,
-        }),
-        memoryCandidate,
-        toolCall: toolCallWrite(acted.toolExecution, plan.reason),
-        selectedSeedId: selectedSeed.id,
-        proactiveLogId: reservation.id,
-      },
-      applyProactiveGrowth,
-    );
-    if (!assistant.message) throw new Error("Failed to enqueue proactive message");
-    await updateProactiveLog(reservation.id, { reason: plan.reason });
-    const delivery = await drainTelegramOutbox(assistant.message.id);
-    const outbox = await listMessageOutbox(assistant.message.id);
-    const delivered = outbox.length > 0 && outbox.every((item) => item.status === "delivered");
-    await logRuntimeEvent({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      type: delivered ? "proactive.sent" : "proactive.queued",
-      source: "cron.hourly",
-      payloadJson: {
-        correlationId: reservation.id,
-        messageId: assistant.message.id,
-        score,
-        actionPlan: plan,
-        selectedSeed,
-        delivery,
-      },
-    });
-    return {
-      sent: delivered,
-      reason: plan.reason,
-      score,
-      messageId: assistant.message.id,
-    };
-  } catch (error) {
-    await updateProactiveLog(reservation.id, {
-      shouldSend: false,
-      reason: `Enqueue failed: ${plan.reason}`,
-    }).catch((updateError) => {
-      console.error("Failed to update proactive reservation", updateError);
-    });
     throw error;
   }
 }

@@ -41,6 +41,14 @@ function digest(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function hostname(value: string) {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return "web-search";
+  }
+}
+
 function cosineSimilarity(left: number[], right: number[]) {
   if (left.length !== right.length || left.length === 0) return 0;
   let dot = 0;
@@ -186,4 +194,31 @@ export async function persistExternalFacts(input: {
     });
   }
   return { inserted, duplicates };
+}
+
+export function persistWebCitations(input: {
+  companionId: string;
+  citations: Array<{ url: string; title: string; content: string }>;
+  fetchedAt: Date;
+  correlationId: string;
+}) {
+  if (input.citations.length === 0) return Promise.resolve({ inserted: 0, duplicates: 0 });
+  return persistExternalFacts({
+    companionId: input.companionId,
+    fetchedAt: input.fetchedAt,
+    correlationId: input.correlationId,
+    drafts: input.citations.slice(0, 3).map((citation) => ({
+      sourceName: hostname(citation.url),
+      sourceUrl: citation.url,
+      title: citation.title,
+      factualSummary: citation.content.slice(0, 1_200),
+      category: "actor_web_search",
+      facts: { obtainedBy: "openrouter:web_search" },
+      beijingRelevance: /北京|beijing/i.test(`${citation.title} ${citation.content}`) ? 0.9 : 0.3,
+      personalRelevance: 0.6,
+      reliability: 0.55,
+      novelty: 0.7,
+      expiresAt: new Date(input.fetchedAt.getTime() + 3 * 24 * 60 * 60_000),
+    })),
+  });
 }

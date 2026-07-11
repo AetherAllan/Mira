@@ -766,6 +766,35 @@ export const providerCache = pgTable(
   ],
 );
 
+export const promptContextSnapshots = pgTable(
+  "prompt_context_snapshots",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    correlationId: uuid("correlation_id").notNull(),
+    messageId: uuid("message_id").references(() => messages.id, { onDelete: "set null" }),
+    purpose: text("purpose", { enum: ["reply", "proactive"] }).notNull(),
+    contextJson: jsonb("context_json").notNull(),
+    selectedIdsJson: jsonb("selected_ids_json").$type<string[]>().notNull().default([]),
+    estimatedTokens: integer("estimated_tokens").notNull(),
+    tokenBudget: integer("token_budget").notNull(),
+    contextHash: text("context_hash").notNull(),
+    createdAt: createdAt(),
+  },
+  (table) => [
+    uniqueIndex("prompt_context_snapshots_correlation_purpose_idx").on(
+      table.correlationId,
+      table.purpose,
+    ),
+    index("prompt_context_snapshots_companion_created_idx").on(
+      table.companionId,
+      table.createdAt,
+    ),
+  ],
+);
+
 export const worldTickRuns = pgTable(
   "world_tick_runs",
   {
@@ -1013,5 +1042,6 @@ export type ShareCandidateRow = typeof shareCandidates.$inferSelect;
 export type AwaitingReplyRow = typeof awaitingReplies.$inferSelect;
 export type ExternalInformationRow = typeof externalInformation.$inferSelect;
 export type ProviderCacheRow = typeof providerCache.$inferSelect;
+export type PromptContextSnapshotRow = typeof promptContextSnapshots.$inferSelect;
 export type WorldTickRunRow = typeof worldTickRuns.$inferSelect;
 export type ProposedWorldMutationRow = typeof proposedWorldMutations.$inferSelect;

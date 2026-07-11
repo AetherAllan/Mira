@@ -126,6 +126,7 @@ export interface ActionPlan {
   noveltyBudget: "none" | "light" | "medium";
   selectedSeed: SeedCard | null;
   toolAllowed: boolean;
+  webAccess?: "none" | "search";
   styleHints: string[];
   reason: string;
 }
@@ -144,6 +145,12 @@ export interface MemoryCandidate {
 
 export interface ActorOutput {
   message: string;
+  factClaims: Array<{
+    type: "world" | "external" | "opinion";
+    sourceRefs: string[];
+  }>;
+  groundingRefs: string[];
+  proposedWorldMutation: import("@/world/types").ProposedWorldMutation | null;
   toolCall: ToolRequest | null;
   memoryCandidate: MemoryCandidate | null;
 }

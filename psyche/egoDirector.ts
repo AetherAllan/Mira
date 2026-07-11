@@ -62,6 +62,7 @@ function fallbackPlan(options: DirectOptions): ActionPlan {
     noveltyBudget: options.selectedSeed ? "light" : "none",
     selectedSeed: options.selectedSeed,
     toolAllowed: mode === "photo_share",
+    webAccess: "none",
     styleHints: ["short", "specific", "not customer-service-like"],
     reason: `${options.driveAssessment.dominant} is dominant; selected the smallest bounded action`,
   };
@@ -83,6 +84,7 @@ function validatePlan(value: JsonObject, options: DirectOptions): ActionPlan | n
     // Seeds are selected by the server-side novelty engine, never invented by the LLM.
     selectedSeed: options.selectedSeed,
     toolAllowed: Boolean(value.toolAllowed) && rawMode === "photo_share",
+    webAccess: asString(value.webAccess) === "search" ? "search" : "none",
     styleHints: asStringArray(value.styleHints).slice(0, 6),
     reason: asString(value.reason, "Ego selected a bounded action"),
   };

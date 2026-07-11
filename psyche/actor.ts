@@ -1,5 +1,5 @@
 import type { ActorOutput, MemoryCandidate, MemoryKind, ToolRequest } from "@/core/types";
-import { buildActorPrompt, type ActorPromptInput } from "@/core/promptBuilder";
+import { buildBudgetedActorPrompt, type ActorPromptInput } from "@/core/promptBuilder";
 import { callJson } from "@/llm/client";
 import { ACTOR_SYSTEM } from "@/llm/prompts";
 import { asObject, asString, asStringArray, clamp01, type JsonObject } from "@/llm/json";
@@ -35,6 +35,9 @@ function fallbackOutput(input: ActorPromptInput): ActorOutput {
   const photo = input.plan.toolAllowed && input.plan.mode === "photo_share" && input.selectedSeed;
   return {
     message: fallbackMessage(input),
+    factClaims: [],
+    groundingRefs: [],
+    proposedWorldMutation: null,
     toolCall: photo
       ? {
           name: "generate_fake_photo",
@@ -47,6 +50,16 @@ function fallbackOutput(input: ActorPromptInput): ActorOutput {
       : null,
     memoryCandidate: null,
   };
+}
+
+function parseFactClaims(value: unknown): ActorOutput["factClaims"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const claim = asObject(item);
+    const type = asString(claim?.type) as ActorOutput["factClaims"][number]["type"];
+    if (!claim || !["world", "external", "opinion"].includes(type)) return [];
+    return [{ type, sourceRefs: asStringArray(claim.sourceRefs).slice(0, 12) }];
+  }).slice(0, 12);
 }
 
 function parseTool(value: unknown, allowed: boolean): ToolRequest | null {
@@ -84,6 +97,15 @@ function validateActor(value: JsonObject, input: ActorPromptInput): ActorOutput 
   if (!message) return null;
   return {
     message: message.slice(0, 3800),
+    factClaims: parseFactClaims(value.factClaims),
+    groundingRefs: asStringArray(value.groundingRefs).slice(0, 24),
+    proposedWorldMutation: (() => {
+      const mutation = asObject(value.proposedWorldMutation);
+      const payload = asObject(mutation?.payload);
+      const type = asString(mutation?.type);
+      const reason = asString(mutation?.reason);
+      return mutation && payload && type && reason ? { type, payload, reason } : null;
+    })(),
     toolCall: parseTool(value.toolCall, input.plan.toolAllowed),
     memoryCandidate: parseMemory(value.memoryCandidate),
   };
@@ -91,16 +113,30 @@ function validateActor(value: JsonObject, input: ActorPromptInput): ActorOutput 
 
 export async function act(input: ActorPromptInput) {
   const fallback = fallbackOutput(input);
+  const budgeted = buildBudgetedActorPrompt(input);
   const result = await callJson({
     messages: [
       { role: "system", content: ACTOR_SYSTEM },
-      { role: "user", content: buildActorPrompt(input) },
+      { role: "user", content: budgeted.prompt },
     ],
     fallback,
     validate: (value) => validateActor(value, input),
     model: input.config.model,
     temperature: 0.65,
     maxTokens: 950,
+    webSearch: input.plan.webAccess === "search",
   });
-  return { output: result.data, raw: result.raw, usedFallback: result.usedFallback, error: result.error };
+  return {
+    output: result.data,
+    raw: result.raw,
+    usedFallback: result.usedFallback,
+    error: result.error,
+    citations: result.citations,
+    promptDebug: {
+      context: budgeted.context,
+      estimatedTokens: budgeted.estimatedTokens,
+      tokenBudget: budgeted.tokenBudget,
+      contextHash: budgeted.contextHash,
+    },
+  };
 }

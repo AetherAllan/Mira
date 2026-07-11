@@ -6,7 +6,21 @@ export interface ChatMessage {
 }
 
 interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{
+    message?: {
+      content?: string;
+      annotations?: Array<{
+        type?: string;
+        url_citation?: { url?: string; title?: string; content?: string };
+      }>;
+    };
+  }>;
+}
+
+export interface WebCitation {
+  url: string;
+  title: string;
+  content: string;
 }
 
 export interface JsonCallResult<T> {
@@ -14,6 +28,7 @@ export interface JsonCallResult<T> {
   raw: JsonObject | null;
   usedFallback: boolean;
   error: string | null;
+  citations: WebCitation[];
 }
 
 interface JsonCallOptions<T> {
@@ -23,6 +38,7 @@ interface JsonCallOptions<T> {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  webSearch?: boolean;
 }
 
 export async function callJson<T>({
@@ -32,10 +48,11 @@ export async function callJson<T>({
   model = process.env.MODEL ?? "openai/gpt-4.1-mini",
   temperature = 0.4,
   maxTokens = 900,
+  webSearch = false,
 }: JsonCallOptions<T>): Promise<JsonCallResult<T>> {
   const apiKey = process.env.API_KEY;
   if (!apiKey) {
-    return { data: fallback, raw: null, usedFallback: true, error: "API_KEY is not configured" };
+    return { data: fallback, raw: null, usedFallback: true, error: "API_KEY is not configured", citations: [] };
   }
 
   const baseUrl = (process.env.BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
@@ -58,6 +75,14 @@ export async function callJson<T>({
         response_format: { type: "json_object" },
         // ponytail: Nemotron defaults to thinking; effort none kills the latency tax
         reasoning: { effort: "none" },
+        ...(webSearch
+          ? {
+              tools: [{
+                type: "openrouter:web_search",
+                parameters: { max_results: 3, max_total_results: 3 },
+              }],
+            }
+          : {}),
       }),
       signal: AbortSignal.timeout(45_000),
     });
@@ -71,26 +96,37 @@ export async function callJson<T>({
         raw: null,
         usedFallback: true,
         error: body.error?.message || `OpenRouter returned ${response.status}`,
+        citations: [],
       };
     }
 
     const content = body.choices?.[0]?.message?.content;
     if (!content) {
-      return { data: fallback, raw: null, usedFallback: true, error: "OpenRouter returned no content" };
+      return { data: fallback, raw: null, usedFallback: true, error: "OpenRouter returned no content", citations: [] };
     }
 
     const raw = parseJsonObject(content);
     const validated = raw ? validate(raw) : null;
     if (!raw || !validated) {
-      return { data: fallback, raw, usedFallback: true, error: "Model JSON failed validation" };
+      return { data: fallback, raw, usedFallback: true, error: "Model JSON failed validation", citations: [] };
     }
-    return { data: validated, raw, usedFallback: false, error: null };
+    const citations = (body.choices?.[0]?.message?.annotations ?? []).flatMap((annotation) => {
+      const citation = annotation.type === "url_citation" ? annotation.url_citation : undefined;
+      if (!citation?.url || !citation.title) return [];
+      return [{
+        url: citation.url,
+        title: citation.title.slice(0, 500),
+        content: (citation.content ?? citation.title).slice(0, 1_200),
+      }];
+    });
+    return { data: validated, raw, usedFallback: false, error: null, citations };
   } catch (error) {
     return {
       data: fallback,
       raw: null,
       usedFallback: true,
       error: error instanceof Error ? error.message : "Unknown OpenRouter error",
+      citations: [],
     };
   }
 }

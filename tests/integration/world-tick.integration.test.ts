@@ -7,6 +7,7 @@ import {
   companions,
   externalInformation,
   messages,
+  promptContextSnapshots,
   shareCandidates,
   users,
   worldStates,
@@ -40,8 +41,13 @@ import {
   WorldTickLeaseLostError,
   worldStateRowToDomain,
 } from "@/db/worldRepo";
-import { DEFAULT_RUNTIME_CONFIG } from "@/seed/character";
+import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
 import { createWorldSeed } from "@/world/random";
+import {
+  buildActorGroundedContext,
+  savePromptContextSnapshot,
+} from "@/core/actorContext";
+import { buildBudgetedActorPrompt } from "@/core/promptBuilder";
 import { reduceWorldTick } from "@/world/reducer";
 import { runWorldTick } from "@/world/tick";
 import { inferWorldSignals } from "@/world/userSignals";
@@ -250,6 +256,49 @@ test(
       // A deterministic ordinary event may add one more version increment for
       // its emotional consequence; the tick window itself still commits once.
       assert.ok(state.version === 1 || state.version === 2);
+      const actorContext = await buildActorGroundedContext({
+        companionId: companion.id,
+        config: DEFAULT_RUNTIME_CONFIG,
+        state: INITIAL_STATE,
+        currentMessageId: message.id,
+        memories: [],
+        now,
+      });
+      assert.equal(actorContext.recentMessages.some((item) => item.id === message.id), false);
+      assert.ok(actorContext.schedule.length > 0);
+      const budgeted = buildBudgetedActorPrompt({
+        config: DEFAULT_RUNTIME_CONFIG,
+        state: INITIAL_STATE,
+        plan: {
+          action: "reply",
+          mode: "quiet_observation",
+          memoryBudget: "none",
+          noveltyBudget: "none",
+          selectedSeed: null,
+          toolAllowed: false,
+          webAccess: "none",
+          styleHints: ["short"],
+          reason: "integration",
+        },
+        memories: [],
+        selectedSeed: null,
+        cooldownWarnings: [],
+        userMessage: message.text,
+        groundedContext: actorContext,
+      });
+      await savePromptContextSnapshot({
+        companionId: companion.id,
+        correlationId: "00000000-0000-4000-8000-000000000107",
+        messageId: message.id,
+        purpose: "reply",
+        ...budgeted,
+      });
+      const [snapshot] = await db
+        .select()
+        .from(promptContextSnapshots)
+        .where(eq(promptContextSnapshots.companionId, companion.id));
+      assert.ok(snapshot);
+      assert.ok(snapshot.estimatedTokens <= snapshot.tokenBudget);
       const completedRuns = await db
         .select()
         .from(worldTickRuns)
