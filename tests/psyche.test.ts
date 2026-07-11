@@ -37,6 +37,13 @@ test("echo detector catches repeated assistant replies", () => {
     true,
   );
   assert.equal(isEchoReply("喝酒？\n那先干一杯", prev), false);
+  assert.equal(
+    isEchoReply(
+      "天气倒是不差\n朝日不错，青岛也凉快。",
+      ["我先不折腾了\n朝日不错，青岛也凉快。"],
+    ),
+    true,
+  );
 });
 
 test("daily reflection hard-clamps trait drift to 0.01", () => {

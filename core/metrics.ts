@@ -81,13 +81,21 @@ export function isEchoReply(candidate: string, previous: string[]): boolean {
   const norm = (value: string) => linesOf(value).join("").toLocaleLowerCase();
   const compact = norm(candidate);
   if (compact.length < 8) return false;
-  const opening = (linesOf(candidate)[0] ?? "").toLocaleLowerCase();
+  const candidateLines = linesOf(candidate).map((line) => line.toLocaleLowerCase());
+  const opening = candidateLines[0] ?? "";
 
   for (const prev of previous) {
     const other = norm(prev);
     if (!other) continue;
     if (compact === other) return true;
     if (compact.length > 12 && other.length > 12 && (compact.includes(other) || other.includes(compact))) {
+      return true;
+    }
+    const previousLines = new Set(linesOf(prev).map((line) => line.toLocaleLowerCase()));
+    // Telegram renders each line as its own bubble. Reusing a complete bubble
+    // feels repetitive even when the surrounding reply is different, so check
+    // every substantive line rather than only the full reply and cold open.
+    if (candidateLines.some((line) => Array.from(line).length >= 6 && previousLines.has(line))) {
       return true;
     }
     const prevOpening = (linesOf(prev)[0] ?? "").toLocaleLowerCase();

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   getCachedProviderValue,
   persistDiscoveredPlaces,
@@ -6,7 +7,7 @@ import {
   setCachedProviderValue,
   type ExternalFactDraft,
 } from "@/db/providerRepo";
-import { events } from "@/db/schema";
+import { events, externalInformation } from "@/db/schema";
 import { getDb } from "@/db/client";
 import { persistExternalThoughtCandidates } from "@/db/externalThoughtRepo";
 import { embedExternalInformation } from "@/world/providers/embedding";
@@ -149,6 +150,48 @@ function articleDraft(article: ProviderArticle, now: Date): ExternalFactDraft {
   };
 }
 
+async function attachEmbeddingsToNewFacts(input: {
+  companionId: string;
+  correlationId: string;
+  drafts: ExternalFactDraft[];
+}) {
+  const candidates = input.drafts
+    .map((draft, index) => ({ draft, index }))
+    // Weather is selected by category and time, never semantic similarity.
+    .filter(({ draft }) => !draft.category.startsWith("weather"));
+  const urls = candidates.flatMap(({ draft }) => draft.sourceUrl ? [draft.sourceUrl] : []);
+  const existingUrls = urls.length
+    ? await getDb()
+        .select({ sourceUrl: externalInformation.sourceUrl })
+        .from(externalInformation)
+        .where(
+          and(
+            eq(externalInformation.companionId, input.companionId),
+            inArray(externalInformation.sourceUrl, urls),
+          ),
+        )
+    : [];
+  const knownUrls = new Set(existingUrls.flatMap((row) => row.sourceUrl ? [row.sourceUrl] : []));
+  const novel = candidates.filter(
+    ({ draft }) => !draft.sourceUrl || !knownUrls.has(draft.sourceUrl),
+  );
+  if (!novel.length) return;
+
+  const embeddings = await embedExternalInformation(
+    novel.map(({ draft }) => `${draft.title}\n${draft.factualSummary}`),
+    {
+      companionId: input.companionId,
+      correlationId: input.correlationId,
+      category: "embedding",
+      metadata: { itemCount: novel.length, source: "external_ingestion" },
+    },
+  );
+  if (!embeddings) return;
+  novel.forEach(({ draft }, index) => {
+    draft.embedding = embeddings[index];
+  });
+}
+
 export async function ingestBeijingExternalInformation(
   companionId: string,
   correlationId: string,
@@ -196,16 +239,7 @@ export async function ingestBeijingExternalInformation(
       : [],
   );
   const drafts = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-  const embeddings = await embedExternalInformation(
-    drafts.map((draft) => `${draft.title}\n${draft.factualSummary}`),
-    {
-      companionId,
-      correlationId,
-      category: "embedding",
-      metadata: { itemCount: drafts.length, source: "external_ingestion" },
-    },
-  );
-  if (embeddings) drafts.forEach((draft, index) => { draft.embedding = embeddings[index]; });
+  await attachEmbeddingsToNewFacts({ companionId, correlationId, drafts });
   const persisted = await persistExternalFacts({ companionId, drafts, fetchedAt: now, correlationId });
   const thoughtResult = await persistExternalThoughtCandidates(persisted.insertedFacts).catch(
     () => ({ inserted: 0 }),
