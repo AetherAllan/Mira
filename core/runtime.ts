@@ -37,6 +37,14 @@ import {
   type EnqueueAssistantInput,
 } from "@/db/messageOutboxRepo";
 import { applyUserWorldSignals } from "@/db/interactionRepo";
+import { listActiveSharedKnowledge } from "@/db/interactionRepo";
+import {
+  claimShareCandidate,
+  listPendingShareCandidates,
+  markShareCandidateShared,
+  releaseShareCandidate,
+  updateShareCandidateScore,
+} from "@/db/shareRepo";
 import { logRuntimeEvent } from "@/core/eventLog";
 import {
   computeMirrorIndex,
@@ -64,6 +72,8 @@ import {
 } from "@/psyche/memory";
 import { selectNoveltySeed } from "@/psyche/noveltyEngine";
 import { drainTelegramOutbox } from "@/messaging/outbox";
+import { scoreShareCandidate } from "@/world/share";
+import { createSeededRandom, createWorldSeed } from "@/world/random";
 import type { TelegramTextMessage } from "@/telegram/webhook";
 import { executeTool, TOOL_REGISTRY, type ToolExecution } from "@/tools/registry";
 
@@ -189,7 +199,9 @@ function buildAssistantAnnotation(
 }
 
 function deterministicRoll(...parts: Array<string | number | Date>) {
-  const input = parts.map((part) => (part instanceof Date ? part.toISOString() : String(part))).join(":" );
+  const input = parts
+    .map((part) => (part instanceof Date ? part.toISOString() : String(part)))
+    .join(":");
   return createHash("sha256").update(input).digest().readUInt32BE(0) / 0x1_0000_0000;
 }
 
@@ -488,6 +500,10 @@ async function processTelegramMessage(
     state: context.state,
     analysis: analyzed.analysis,
     mirrorIndex,
+    random: createSeededRandom(createWorldSeed(correlationId, "novelty-use"))(),
+    selectionRandom: createSeededRandom(
+      createWorldSeed(correlationId, "novelty-selection"),
+    )(),
   });
   const driveAssessment = assessDrives(context.state, analyzed.analysis);
   await logRuntimeEvent({
@@ -653,7 +669,7 @@ let hourlyRun: Promise<ProactiveRunResult> | null = null;
 
 export async function runHourlyProactive(now = new Date()): Promise<ProactiveRunResult> {
   if (hourlyRun) return { sent: false, reason: "already_running" };
-  hourlyRun = runHourlyProactiveOnce(now);
+  hourlyRun = runCandidateHourlyProactiveOnce(now);
   try {
     return await hourlyRun;
   } finally {
@@ -661,7 +677,229 @@ export async function runHourlyProactive(now = new Date()): Promise<ProactiveRun
   }
 }
 
-async function runHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
+async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
+  const context = await primaryContext();
+  const config = runtimeConfig(context);
+  const timeZone = config.policy.quietHours.timeZone;
+  const windowStart = new Date(now);
+  windowStart.setUTCMinutes(0, 0, 0);
+  const idempotencyKey = `hourly:${context.companion.id}:${windowStart.toISOString()}`;
+  const existingCheck = await findProactiveLogByIdempotencyKey(idempotencyKey);
+  if (existingCheck && (!existingCheck.shouldSend || existingCheck.sentMessageId)) {
+    return {
+      sent: Boolean(existingCheck.sentMessageId),
+      reason: "already_checked",
+      score: existingCheck.score ?? undefined,
+      messageId: existingCheck.sentMessageId ?? undefined,
+    };
+  }
+
+  const [stats, candidates, sharedKnowledge, recentMessages] =
+    await Promise.all([
+      getProactiveStats(context.companion.id, timeZone),
+      listPendingShareCandidates(context.companion.id, now),
+      listActiveSharedKnowledge(context.companion.id, now, 30),
+      listRecentMessages(context.companion.id, 30),
+    ]);
+  const userLikelyBusy = sharedKnowledge.some(
+    (item) => item.subject === "用户当前可能忙碌",
+  );
+  const evaluations = candidates
+    .map((candidate) => ({
+      candidate,
+      evaluation: scoreShareCandidate(candidate, {
+        currentShareDesire: context.world.state.shareDesire,
+        eventImportance: candidate.eventImportance,
+        relationshipTrust: context.state.relationship.trust,
+        miraIrritation: context.world.state.irritation,
+        quietHours: isQuietHours(now, config.policy.quietHours),
+        userLikelyBusy,
+        hasUnansweredProactive: false,
+        dailySentCount: stats.sentToday,
+        dailyLimit: config.policy.proactiveMaxPerDay,
+        hoursSinceLastProactive: hoursSince(stats.lastSentAt, now),
+        minimumIntervalHours: config.policy.minimumProactiveIntervalHours,
+      }),
+    }))
+    .sort(
+      (left, right) =>
+        left.candidate.priority - right.candidate.priority ||
+        right.evaluation.score - left.evaluation.score ||
+        left.candidate.createdAt.getTime() - right.candidate.createdAt.getTime(),
+    );
+  await Promise.all(
+    evaluations.map(({ candidate, evaluation }) =>
+      updateShareCandidateScore(candidate.id, evaluation.score),
+    ),
+  );
+  const selected = evaluations.find(({ evaluation }) => evaluation.shouldShare);
+  const best = selected ?? evaluations[0];
+  if (!best) {
+    await writeProactiveLog(context, {
+      shouldSend: false,
+      reason: "No persisted share candidate is available",
+      idempotencyKey,
+      score: 0,
+    });
+    return { sent: false, reason: "no_candidate", score: 0 };
+  }
+  if (!selected) {
+    const reason = `Candidate blocked: ${best.evaluation.blockedBy.join(", ")}`;
+    await writeProactiveLog(context, {
+      shouldSend: false,
+      reason,
+      idempotencyKey,
+      score: best.evaluation.score,
+      quietHoursBlocked: best.evaluation.blockedBy.includes("quiet_hours"),
+      dailyLimitBlocked: best.evaluation.blockedBy.includes("daily_limit"),
+      intervalBlocked: best.evaluation.blockedBy.includes("minimum_interval"),
+    });
+    return { sent: false, reason, score: best.evaluation.score, scoreThreshold: 0.62 };
+  }
+
+  const claimed = await claimShareCandidate(selected.candidate.id, selected.evaluation.score, now);
+  if (!claimed) return { sent: false, reason: "candidate_claimed_elsewhere" };
+  const candidate = selected.candidate;
+  const selectedSeed: SeedCard = {
+    id: candidate.id,
+    type: "share_candidate",
+    text: candidate.contentSummary,
+    tags: [candidate.sourceType],
+  };
+  const analysis: MessageAnalysis = {
+    topics: [{ name: candidate.sourceType, confidence: 0.9 }],
+    emotion: candidate.emotionalIntensity >= 0.6 ? "emotionally_engaged" : "reflective",
+    intent: "share_persisted_world_event",
+    importance: candidate.eventImportance,
+    novelty: candidate.novelty,
+    summary: candidate.contentSummary,
+    worldSignals: [],
+  };
+  const plan: ActionPlan = {
+    action: "proactive_message",
+    mode: "quiet_observation",
+    memoryBudget: "light",
+    noveltyBudget: "none",
+    selectedSeed,
+    toolAllowed: false,
+    styleHints: ["short", "specific", "grounded in the selected persisted event"],
+    reason: `${candidate.reasonToShare}; score=${selected.evaluation.score.toFixed(3)}`,
+  };
+  await logRuntimeEvent({
+    userId: context.user.id,
+    companionId: context.companion.id,
+    type: "psyche.ego.plan",
+    source: "ego.proactive",
+    correlationId: claimed.row.correlationId,
+    payloadJson: { plan, shareCandidateId: candidate.id, evaluation: selected.evaluation },
+  });
+
+  const selectedMemories = selectRelevantMemories(
+    await listAvailableMemories(context.companion.id, 60),
+    candidate.contentSummary,
+    analysis,
+    2,
+  );
+  const acted = await runActor({
+    config,
+    state: context.state,
+    plan,
+    memories: selectedMemories,
+    selectedSeed,
+    cooldownWarnings: ["Only describe facts contained in the selected persisted candidate."],
+    analysis,
+    userMessage: null,
+    recentMessages: recentMessages.map((message) => ({ role: message.role, text: message.text })),
+  });
+  const chatId =
+    recentMessages.find((message) => message.role === "user" && message.chatId)?.chatId ??
+    context.user.telegramUserId;
+  const reservation = existingCheck ?? await writeProactiveLog(context, {
+    shouldSend: true,
+    reason: `Reserved persisted candidate ${candidate.id}`,
+    selectedMode: plan.mode,
+    selectedSeedJson: selectedSeed,
+    idempotencyKey,
+    score: selected.evaluation.score,
+  });
+
+  try {
+    const assistant = await enqueueWithStateRetry(
+      context.companion.id,
+      {
+        userId: context.user.id,
+        companionId: context.companion.id,
+        chatId,
+        text: acted.finalText,
+        rawJson: {
+          proactive: true,
+          actionPlan: plan,
+          actorRaw: acted.actorRaw,
+          shareCandidateId: candidate.id,
+          groundingSourceId: candidate.sourceId,
+          score: selected.evaluation.score,
+        },
+        correlationId: reservation.id,
+        sourceType: "proactive",
+        sourceId: candidate.id,
+        idempotencyBase: `proactive:${candidate.id}`,
+        annotation: buildAssistantAnnotation({
+          text: acted.finalText,
+          plan,
+          analysis,
+          selectedSeed,
+          proactive: true,
+        }),
+        memoryCandidate: null,
+        toolCall: null,
+        proactiveLogId: reservation.id,
+      },
+      applyProactiveGrowth,
+    );
+    if (!assistant.message) throw new Error("Failed to enqueue proactive candidate");
+    if (!await markShareCandidateShared({
+      id: candidate.id,
+      leaseToken: claimed.leaseToken,
+      messageId: assistant.message.id,
+      now,
+    })) {
+      throw new Error("Share candidate lease was lost after enqueue");
+    }
+    await updateProactiveLog(reservation.id, { reason: plan.reason });
+    const delivery = await drainTelegramOutbox(assistant.message.id);
+    const outbox = await listMessageOutbox(assistant.message.id);
+    const delivered = outbox.length > 0 && outbox.every((item) => item.status === "delivered");
+    await logRuntimeEvent({
+      userId: context.user.id,
+      companionId: context.companion.id,
+      type: delivered ? "proactive.sent" : "proactive.queued",
+      source: "cron.hourly",
+      correlationId: reservation.id,
+      payloadJson: {
+        messageId: assistant.message.id,
+        shareCandidateId: candidate.id,
+        score: selected.evaluation.score,
+        delivery,
+      },
+    });
+    return {
+      sent: delivered,
+      reason: plan.reason,
+      score: selected.evaluation.score,
+      messageId: assistant.message.id,
+    };
+  } catch (error) {
+    await releaseShareCandidate(
+      candidate.id,
+      claimed.leaseToken,
+      error instanceof Error ? error.message : "proactive enqueue failed",
+      now,
+    ).catch(() => false);
+    throw error;
+  }
+}
+
+export async function runLegacyHourlyProactiveOnce(now: Date): Promise<ProactiveRunResult> {
   const context = await primaryContext();
   const config = runtimeConfig(context);
   const timeZone = config.policy.quietHours.timeZone;

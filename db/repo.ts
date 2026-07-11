@@ -46,6 +46,7 @@ import {
 import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
 import { DEFAULT_SEED_CARDS } from "@/seed/seedCards";
 import { isValidTimeZone } from "@/lib/time";
+import { createSeededRandom, createWorldSeed } from "@/world/random";
 
 type NewMessage = Omit<typeof messages.$inferInsert, "id" | "createdAt">;
 type NewAnnotation = Omit<typeof messageAnnotations.$inferInsert, "id" | "createdAt">;
@@ -1016,8 +1017,15 @@ export async function generateWorldEventFromSeed(companionId: string, requestedS
     : available;
   if (candidates.length === 0) throw new Error("No enabled seed card found");
 
+  const generatedAt = new Date();
+  const randomSeed = createWorldSeed(
+    companionId,
+    requestedSeedId ?? "auto",
+    generatedAt.toISOString(),
+    "inner-world-event",
+  );
   const totalWeight = candidates.reduce((sum, seed) => sum + Math.max(seed.weight, 0), 0);
-  let roll = Math.random() * (totalWeight || candidates.length);
+  let roll = createSeededRandom(randomSeed)() * (totalWeight || candidates.length);
   let selected = candidates[0];
   for (const seed of candidates) {
     roll -= totalWeight ? Math.max(seed.weight, 0) : 1;
@@ -1041,6 +1049,8 @@ export async function generateWorldEventFromSeed(companionId: string, requestedS
     content: `想象记录：${selected.text}`,
     moodImpactJson: {},
     arcImpactJson: {},
+    randomSeed,
+    occurredAt: generatedAt,
   });
   await Promise.all([
     markSeedUsed(selected.id),

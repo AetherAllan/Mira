@@ -5,6 +5,7 @@ import { closeDb, getDb } from "@/db/client";
 import {
   companions,
   messages,
+  shareCandidates,
   users,
   worldStates,
   worldTickRuns,
@@ -13,6 +14,11 @@ import {
   applyUserWorldSignals,
   getConversationWorkingMemory,
 } from "@/db/interactionRepo";
+import {
+  claimShareCandidate,
+  listPendingShareCandidates,
+  releaseShareCandidate,
+} from "@/db/shareRepo";
 import {
   claimWorldTickRun,
   commitWorldTick,
@@ -107,6 +113,45 @@ test(
       });
       const workingMemory = await getConversationWorkingMemory(companion.id);
       assert.ok(workingMemory?.userCommitmentsJson.length);
+
+      const [candidate] = await db
+        .insert(shareCandidates)
+        .values({
+          companionId: companion.id,
+          idempotencyKey: `integration-candidate:${suffix}`,
+          sourceType: "user_follow_up",
+          sourceId: message.id,
+          contentSummary: "用户承诺的比赛结果到了可以跟进的时间。",
+          reasonToShare: "用户承诺到期",
+          emotionalIntensity: 0.7,
+          relevanceToUser: 1,
+          novelty: 0.7,
+          intimacy: 0.4,
+          urgency: 0.9,
+          interruptionCost: 0.1,
+          eventImportance: 0.9,
+          priority: 10,
+          expiresAt: new Date("2026-07-11T04:00:00.000Z"),
+        })
+        .returning();
+      assert.ok(candidate);
+      assert.equal((await listPendingShareCandidates(companion.id, new Date("2026-07-10T04:00:00.000Z"))).length, 1);
+      const claims = await Promise.all([
+        claimShareCandidate(candidate.id, 0.9, new Date("2026-07-10T04:00:00.000Z")),
+        claimShareCandidate(candidate.id, 0.9, new Date("2026-07-10T04:00:00.000Z")),
+      ]);
+      assert.equal(claims.filter(Boolean).length, 1);
+      const candidateClaim = claims.find((claim) => claim !== null);
+      assert.ok(candidateClaim);
+      assert.equal(
+        await releaseShareCandidate(
+          candidate.id,
+          candidateClaim.leaseToken,
+          "integration cleanup",
+          new Date("2026-07-10T04:01:00.000Z"),
+        ),
+        true,
+      );
 
       const now = new Date("2026-07-10T02:16:00.000Z");
       const [firstWorker, secondWorker] = await Promise.all([

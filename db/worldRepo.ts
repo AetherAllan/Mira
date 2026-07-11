@@ -18,8 +18,10 @@ import { getDb } from "@/db/client";
 import {
   companions,
   events,
+  innerThoughts,
   knownPlaces,
   scheduleBlocks,
+  shareCandidates,
   stateChanges,
   worldCharacters,
   worldEvents,
@@ -39,6 +41,7 @@ import {
 import { getTickWindow } from "@/world/reducer";
 import type { WorldTickResult } from "@/world/reducer";
 import type { ScheduleBlock, WorldEvent, WorldState } from "@/world/types";
+import { buildThoughtAndShareCandidate } from "@/world/thoughts";
 
 type NewKnownPlace = typeof knownPlaces.$inferInsert;
 type NewWorldCharacter = typeof worldCharacters.$inferInsert;
@@ -741,6 +744,87 @@ export async function commitWorldTick(input: {
           consequences: event.consequences,
         },
       });
+
+      const thoughtBundle = buildThoughtAndShareCandidate(event);
+      if (thoughtBundle) {
+        const { thought, candidate } = thoughtBundle;
+        await tx.insert(innerThoughts).values({
+          id: thought.id,
+          companionId: input.claim.companionId,
+          idempotencyKey: `thought:${event.idempotencyKey}`,
+          sourceType: thought.sourceType,
+          sourceId: thought.sourceId,
+          content: thought.content,
+          topic: thought.topic,
+          emotionalIntensity: thought.emotionalIntensity,
+          relevanceToUser: thought.relevanceToUser,
+          novelty: thought.novelty,
+          intimacy: thought.intimacy,
+          status: thought.status,
+          expiresAt: thought.expiresAt,
+          correlationId: input.claim.correlationId,
+          createdAt: thought.createdAt,
+        });
+        // A newer candidate may replace older, equally or less important
+        // unshared material. Higher-priority rows use smaller priority numbers.
+        await tx
+          .update(shareCandidates)
+          .set({
+            status: "suppressed",
+            suppressionReason: `covered_by:${candidate.id}`,
+            updatedAt: candidate.createdAt,
+          })
+          .where(
+            and(
+              eq(shareCandidates.companionId, input.claim.companionId),
+              eq(shareCandidates.status, "pending"),
+              gte(shareCandidates.priority, candidate.priority),
+              lte(shareCandidates.createdAt, candidate.createdAt),
+            ),
+          );
+        await tx.insert(shareCandidates).values({
+          id: candidate.id,
+          companionId: input.claim.companionId,
+          idempotencyKey: `candidate:${thought.id}`,
+          sourceType: candidate.sourceType,
+          sourceId: candidate.sourceId,
+          contentSummary: candidate.contentSummary,
+          reasonToShare: candidate.reasonToShare,
+          emotionalIntensity: candidate.emotionalIntensity,
+          relevanceToUser: candidate.relevanceToUser,
+          novelty: candidate.novelty,
+          intimacy: candidate.intimacy,
+          urgency: candidate.urgency,
+          interruptionCost: candidate.interruptionCost,
+          eventImportance: candidate.eventImportance,
+          priority: candidate.priority,
+          score: candidate.score,
+          status: candidate.status,
+          expiresAt: candidate.expiresAt,
+          correlationId: input.claim.correlationId,
+          createdAt: candidate.createdAt,
+        });
+        await tx.insert(events).values([
+          {
+            companionId: input.claim.companionId,
+            type: "inner_thought.created",
+            source: "world.event",
+            correlationId: input.claim.correlationId,
+            payloadJson: { innerThoughtId: thought.id, worldEventId: event.id },
+          },
+          {
+            companionId: input.claim.companionId,
+            type: "share_candidate.created",
+            source: "inner_thought",
+            correlationId: input.claim.correlationId,
+            payloadJson: {
+              shareCandidateId: candidate.id,
+              innerThoughtId: thought.id,
+              expiresAt: candidate.expiresAt?.toISOString(),
+            },
+          },
+        ]);
+      }
     }
 
     await tx.insert(events).values({

@@ -218,6 +218,29 @@ export interface ProposedWorldMutation {
   reason: string;
 }
 
+export interface InnerThought {
+  id: string;
+  companionId: string;
+  sourceType:
+    | "world_event"
+    | "external_information"
+    | "memory"
+    | "user_message"
+    | "open_loop"
+    | "reflection";
+  sourceId?: string;
+  content: string;
+  topic: string;
+  emotionalIntensity: number;
+  relevanceToUser: number;
+  novelty: number;
+  intimacy: number;
+  createdAt: Date;
+  expiresAt?: Date;
+  status: "active" | "shared" | "suppressed" | "expired";
+  correlationId: string;
+}
+
 export interface ShareCandidate {
   id: string;
   companionId: string;
@@ -236,6 +259,8 @@ export interface ShareCandidate {
   intimacy: number;
   urgency: number;
   interruptionCost: number;
+  eventImportance: number;
+  priority: number;
   score: number;
   status: "pending" | "approved" | "shared" | "suppressed" | "expired";
   createdAt: Date;

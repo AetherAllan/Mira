@@ -104,7 +104,7 @@ export function computeMirrorIndex(userTopics: string[], proactiveTopics: string
 
 export function computeProactiveScore(
   state: CompanionState,
-  random = Math.random(),
+  random = 0.5,
   topicEntropy?: TopicEntropy,
   mirrorIndex = 0,
 ): number {

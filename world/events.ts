@@ -1,5 +1,5 @@
 import { clamp01, zonedDateKey } from "@/lib/time";
-import { createSeededRandom, createWorldSeed } from "@/world/random";
+import { createSeededRandom, createWorldSeed, deterministicUuid } from "@/world/random";
 import type {
   ScheduleBlock,
   ScheduleBlockType,
@@ -100,11 +100,6 @@ export interface GenerateOrdinaryEventInput {
 
 function isOrdinaryEvent(event: WorldEvent) {
   return event.idempotencyKey.startsWith("ordinary:");
-}
-
-function deterministicUuid(seed: string) {
-  const hash = createWorldSeed(seed);
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
 
 function ordinaryImpact(impact: Record<string, number>) {

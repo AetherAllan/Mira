@@ -38,7 +38,7 @@ export function selectNoveltySeed(
   );
   const available = cooled.length ? cooled : enabled;
 
-  const random = options.random ?? Math.random();
+  const random = options.random ?? 0.5;
   const shouldUse =
     options.required ||
     (options.mirrorIndex ?? 0) > 0.8 ||

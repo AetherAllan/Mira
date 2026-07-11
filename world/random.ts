@@ -26,3 +26,8 @@ export function seededChoice<T>(items: readonly T[], seed: string) {
   if (items.length === 0) return undefined;
   return items[Math.floor(createSeededRandom(seed)() * items.length)];
 }
+
+export function deterministicUuid(seed: string) {
+  const hash = createWorldSeed(seed);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}

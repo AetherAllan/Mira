@@ -544,6 +544,106 @@ export const conversationWorkingMemories = pgTable(
   ],
 );
 
+export const innerThoughts = pgTable(
+  "inner_thoughts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    sourceType: text("source_type", {
+      enum: [
+        "world_event",
+        "external_information",
+        "memory",
+        "user_message",
+        "open_loop",
+        "reflection",
+      ],
+    }).notNull(),
+    sourceId: text("source_id"),
+    content: text("content").notNull(),
+    topic: text("topic").notNull(),
+    emotionalIntensity: real("emotional_intensity").notNull(),
+    relevanceToUser: real("relevance_to_user").notNull(),
+    novelty: real("novelty").notNull(),
+    intimacy: real("intimacy").notNull(),
+    status: text("status", { enum: ["active", "shared", "suppressed", "expired"] })
+      .notNull()
+      .default("active"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    correlationId: uuid("correlation_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("inner_thoughts_companion_idempotency_idx").on(
+      table.companionId,
+      table.idempotencyKey,
+    ),
+    index("inner_thoughts_companion_status_created_idx").on(
+      table.companionId,
+      table.status,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const shareCandidates = pgTable(
+  "share_candidates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    sourceType: text("source_type", {
+      enum: ["world_event", "inner_thought", "open_loop", "external_information", "user_follow_up"],
+    }).notNull(),
+    sourceId: text("source_id").notNull(),
+    contentSummary: text("content_summary").notNull(),
+    reasonToShare: text("reason_to_share").notNull(),
+    emotionalIntensity: real("emotional_intensity").notNull(),
+    relevanceToUser: real("relevance_to_user").notNull(),
+    novelty: real("novelty").notNull(),
+    intimacy: real("intimacy").notNull(),
+    urgency: real("urgency").notNull(),
+    interruptionCost: real("interruption_cost").notNull(),
+    eventImportance: real("event_importance").notNull(),
+    priority: integer("priority").notNull().default(50),
+    score: real("score").notNull().default(0),
+    status: text("status", {
+      enum: ["pending", "approved", "shared", "suppressed", "expired"],
+    })
+      .notNull()
+      .default("pending"),
+    leaseToken: uuid("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    sharedMessageId: uuid("shared_message_id").references(() => messages.id, {
+      onDelete: "set null",
+    }),
+    suppressionReason: text("suppression_reason"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    correlationId: uuid("correlation_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("share_candidates_companion_idempotency_idx").on(
+      table.companionId,
+      table.idempotencyKey,
+    ),
+    index("share_candidates_companion_status_priority_idx").on(
+      table.companionId,
+      table.status,
+      table.priority,
+      table.createdAt,
+    ),
+    index("share_candidates_status_lease_idx").on(table.status, table.leaseExpiresAt),
+  ],
+);
+
 export const worldTickRuns = pgTable(
   "world_tick_runs",
   {
@@ -786,5 +886,7 @@ export type WorldStateRow = typeof worldStates.$inferSelect;
 export type OpenLoopRow = typeof openLoops.$inferSelect;
 export type SharedKnowledgeRow = typeof sharedKnowledge.$inferSelect;
 export type ConversationWorkingMemoryRow = typeof conversationWorkingMemories.$inferSelect;
+export type InnerThoughtRow = typeof innerThoughts.$inferSelect;
+export type ShareCandidateRow = typeof shareCandidates.$inferSelect;
 export type WorldTickRunRow = typeof worldTickRuns.$inferSelect;
 export type ProposedWorldMutationRow = typeof proposedWorldMutations.$inferSelect;
