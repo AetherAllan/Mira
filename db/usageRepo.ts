@@ -13,6 +13,9 @@ export interface LlmUsageContext {
 export async function recordLlmUsage(input: {
   context: LlmUsageContext;
   model: string;
+  generationId?: string | null;
+  request?: unknown;
+  response?: unknown;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
@@ -26,6 +29,9 @@ export async function recordLlmUsage(input: {
     correlationId: input.context.correlationId,
     category: input.context.category,
     model: input.model,
+    generationId: input.generationId,
+    requestJson: input.request,
+    responseJson: input.response,
     promptTokens: input.promptTokens ?? 0,
     completionTokens: input.completionTokens ?? 0,
     totalTokens: input.totalTokens ?? 0,

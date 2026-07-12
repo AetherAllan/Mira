@@ -158,6 +158,9 @@ test(
           category: "reflection",
         },
         model: "fixture/model:free",
+        generationId: "gen-integration-108",
+        request: { model: "fixture/model:free", messages: [{ role: "user", content: "hello" }] },
+        response: { id: "gen-integration-108", choices: [{ message: { content: "world" } }] },
         promptTokens: 120,
         completionTokens: 30,
         totalTokens: 150,
@@ -167,6 +170,15 @@ test(
       });
       const [usage] = await db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companion.id));
       assert.equal(usage?.totalTokens, 150);
+      assert.equal(usage?.generationId, "gen-integration-108");
+      assert.deepEqual(usage?.requestJson, {
+        model: "fixture/model:free",
+        messages: [{ role: "user", content: "hello" }],
+      });
+      assert.deepEqual(usage?.responseJson, {
+        id: "gen-integration-108",
+        choices: [{ message: { content: "world" } }],
+      });
 
       const enqueueInput = {
         userId: user.id,

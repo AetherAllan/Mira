@@ -47,7 +47,7 @@ export async function loadWorldDashboardData(now = systemClock.now()) {
       db.select().from(worldTickRuns).where(eq(worldTickRuns.companionId, companionId)).orderBy(desc(worldTickRuns.windowStart)).limit(50),
       db.select().from(promptContextSnapshots).where(eq(promptContextSnapshots.companionId, companionId)).orderBy(desc(promptContextSnapshots.createdAt)).limit(20),
       db.select().from(stateChanges).where(eq(stateChanges.companionId, companionId)).orderBy(desc(stateChanges.createdAt)).limit(100),
-      db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companionId)).orderBy(desc(llmUsageLogs.createdAt)).limit(200),
+      db.select().from(llmUsageLogs).where(eq(llmUsageLogs.companionId, companionId)).orderBy(desc(llmUsageLogs.createdAt)).limit(50),
       getWorldHealth(companionId, timeZone, now),
     ]);
   const placeById = new Map(context.world.places.map((place) => [place.id, place]));

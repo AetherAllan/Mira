@@ -8,6 +8,7 @@ export interface ChatMessage {
 }
 
 interface ChatCompletionResponse {
+  id?: string;
   choices?: Array<{
     message?: {
       content?: string;
@@ -64,14 +65,38 @@ export async function callJson<T>({
   const selectedModel = resolveFreeChatModel(process.env.MODEL?.trim() || model);
   const webSearchEnabled =
     webSearch && process.env.OPENROUTER_WEB_SEARCH_ENABLED?.trim() === "true";
+  // Persist exactly what is sent to OpenRouter. Authentication headers are
+  // deliberately excluded because audit data must never become a key store.
+  const requestBody = {
+    model: selectedModel,
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+    response_format: { type: "json_object" },
+    // ponytail: Nemotron defaults to thinking; effort none kills the latency tax
+    reasoning: { effort: "none" },
+    ...(webSearchEnabled
+      ? {
+          tools: [{
+            type: "openrouter:web_search",
+            parameters: { max_results: 3, max_total_results: 3 },
+          }],
+        }
+      : {}),
+  };
   const finish = async (
     result: JsonCallResult<T>,
     usage?: ChatCompletionResponse["usage"],
+    responseBody?: unknown,
+    generationId?: string,
   ) => {
     if (usageContext) {
       await recordLlmUsage({
         context: usageContext,
         model: selectedModel,
+        generationId,
+        request: requestBody,
+        response: responseBody,
         promptTokens: usage?.prompt_tokens,
         completionTokens: usage?.completion_tokens,
         totalTokens: usage?.total_tokens,
@@ -100,23 +125,7 @@ export async function callJson<T>({
           : process.env.NEXT_PUBLIC_APP_URL ?? "https://mira.local",
         "X-Title": "Mira",
       },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-        response_format: { type: "json_object" },
-        // ponytail: Nemotron defaults to thinking; effort none kills the latency tax
-        reasoning: { effort: "none" },
-        ...(webSearchEnabled
-          ? {
-              tools: [{
-                type: "openrouter:web_search",
-                parameters: { max_results: 3, max_total_results: 3 },
-              }],
-            }
-          : {}),
-      }),
+      body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(45_000),
     });
 
@@ -130,18 +139,18 @@ export async function callJson<T>({
         usedFallback: true,
         error: body.error?.message || `OpenRouter returned ${response.status}`,
         citations: [],
-      }, body.usage);
+      }, body.usage, body, body.id);
     }
 
     const content = body.choices?.[0]?.message?.content;
     if (!content) {
-      return finish({ data: fallback, raw: null, usedFallback: true, error: "OpenRouter returned no content", citations: [] }, body.usage);
+      return finish({ data: fallback, raw: null, usedFallback: true, error: "OpenRouter returned no content", citations: [] }, body.usage, body, body.id);
     }
 
     const raw = parseJsonObject(content);
     const validated = raw ? validate(raw) : null;
     if (!raw || !validated) {
-      return finish({ data: fallback, raw, usedFallback: true, error: "Model JSON failed validation", citations: [] }, body.usage);
+      return finish({ data: fallback, raw, usedFallback: true, error: "Model JSON failed validation", citations: [] }, body.usage, body, body.id);
     }
     const citations = (body.choices?.[0]?.message?.annotations ?? []).flatMap((annotation) => {
       const citation = annotation.type === "url_citation" ? annotation.url_citation : undefined;
@@ -152,7 +161,7 @@ export async function callJson<T>({
         content: (citation.content ?? citation.title).slice(0, 1_200),
       }];
     });
-    return finish({ data: validated, raw, usedFallback: false, error: null, citations }, body.usage);
+    return finish({ data: validated, raw, usedFallback: false, error: null, citations }, body.usage, body, body.id);
   } catch (error) {
     return finish({
       data: fallback,
