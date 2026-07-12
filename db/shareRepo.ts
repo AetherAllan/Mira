@@ -87,10 +87,9 @@ export async function countTodayLifeShares(
   const [row] = await getDb()
     .select({ value: count() })
     .from(proactiveLogs)
-    .innerJoin(shareCandidates, eq(proactiveLogs.sourceId, shareCandidates.id))
     .where(and(
       eq(proactiveLogs.companionId, companionId),
-      inArray(shareCandidates.sourceType, ["inner_thought", "world_event", "open_loop"]),
+      inArray(proactiveLogs.sourceType, ["inner_thought", "world_event", "open_loop"]),
       sql`(${proactiveLogs.createdAt} AT TIME ZONE ${timeZone})::date = (NOW() AT TIME ZONE ${timeZone})::date`,
       sql`${proactiveLogs.sentMessageId} IS NOT NULL`,
     ));

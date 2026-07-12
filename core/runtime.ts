@@ -590,6 +590,8 @@ async function writeProactiveLog(
     dailyLimitBlocked?: boolean;
     intervalBlocked?: boolean;
     idempotencyKey?: string | null;
+    sourceType?: string | null;
+    sourceId?: string | null;
     score: number;
   },
 ) {
@@ -753,6 +755,8 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     reason: `Reserved persisted candidate ${candidate.id}`,
     selectedMode: plan.mode,
     idempotencyKey,
+    sourceType: candidate.sourceType,
+    sourceId: candidate.id,
     score: selected.evaluation.score,
   });
   const groundedContext = await buildActorGroundedContext({

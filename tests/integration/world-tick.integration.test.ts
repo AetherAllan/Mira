@@ -12,6 +12,7 @@ import {
   messages,
   messageOutbox,
   promptContextSnapshots,
+  proactiveLogs,
   scheduleBlocks,
   shareCandidates,
   users,
@@ -36,6 +37,7 @@ import {
 } from "@/db/interactionRepo";
 import {
   claimShareCandidate,
+  countTodayLifeShares,
   listPendingShareCandidates,
   releaseShareCandidate,
 } from "@/db/shareRepo";
@@ -412,6 +414,16 @@ test(
         })
         .returning();
       assert.ok(candidate);
+      await db.insert(proactiveLogs).values({
+        userId: user.id,
+        companionId: companion.id,
+        shouldSend: true,
+        reason: "integration life share",
+        sentMessageId: message.id,
+        sourceType: "inner_thought",
+        sourceId: candidate.id,
+      });
+      assert.equal(await countTodayLifeShares(companion.id), 1);
       assert.equal((await listPendingShareCandidates(companion.id, new Date("2026-07-10T04:00:00.000Z"))).length, 1);
       const claims = await Promise.all([
         claimShareCandidate(candidate.id, 0.9, new Date("2026-07-10T04:00:00.000Z")),

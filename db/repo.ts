@@ -609,7 +609,7 @@ export async function getProactiveStats(companionId: string, timeZone = "Asia/Sh
       .where(
         and(
           eq(proactiveLogs.companionId, companionId),
-          eq(proactiveLogs.shouldSend, true),
+          isNotNull(proactiveLogs.sentMessageId),
           gte(proactiveLogs.createdAt, start),
           lt(proactiveLogs.createdAt, end),
         ),
@@ -620,7 +620,7 @@ export async function getProactiveStats(companionId: string, timeZone = "Asia/Sh
       .where(
         and(
           eq(proactiveLogs.companionId, companionId),
-          eq(proactiveLogs.shouldSend, true),
+          isNotNull(proactiveLogs.sentMessageId),
         ),
       )
       .orderBy(desc(proactiveLogs.createdAt))
