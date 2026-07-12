@@ -71,6 +71,7 @@ const event = generateOrdinaryWorldEvent({
 assert.ok(event);
 const generated = buildThoughtAndShareCandidate(event);
 assert.ok(generated);
+assert.ok(generated.candidate);
 
 // A persisted event may become more user-relevant when it touches a known
 // shared interest. This enrichment changes sharing motivation, not the fact.

@@ -15,7 +15,7 @@ try {
   const result = job === "hourly-daily"
     ? {
         hourly: await runHourlyProactive(),
-        // The shared cron runs at minute 50. UTC hour 15 is Beijing 23:50;
+        // The shared cron runs at minute 30. UTC hour 15 is Beijing 23:30;
         // daily reflection remains idempotent if Railway retries the job.
         daily: new Date().getUTCHours() === 15 ? await runDailyReflection() : null,
       }

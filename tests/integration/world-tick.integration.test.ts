@@ -19,6 +19,7 @@ import {
   worldCharacters,
   worldTickRuns,
 } from "@/db/schema";
+import { getCompanionState } from "@/db/repo";
 import {
   getCachedProviderValue,
   persistExternalFacts,
@@ -118,7 +119,6 @@ test(
         relationshipUpdates: {},
         traitUpdates: {},
         arcUpdates: [],
-        tomorrowSeeds: [],
         relationshipSummary: "relationship stable",
         placePreferenceUpdates: [{
           placeId: persistentWorld.homePlace.id,
@@ -477,15 +477,12 @@ test(
           action: "reply",
           mode: "quiet_observation",
           memoryBudget: "none",
-          noveltyBudget: "none",
-          selectedSeed: null,
           toolAllowed: false,
           webAccess: "none",
           styleHints: ["short"],
           reason: "integration",
         },
         memories: [],
-        selectedSeed: null,
         cooldownWarnings: [],
         userMessage: message.text,
         groundedContext: actorContext,
@@ -547,6 +544,9 @@ test(
           claim: firstClaim.claim,
           expectedState: state,
           result: reduced,
+          expectedCompanionState: INITIAL_STATE,
+          companionState: INITIAL_STATE,
+          companionStateChanges: [],
           mode: "detailed",
         }),
         WorldTickLeaseLostError,
@@ -615,8 +615,8 @@ test(
       assert.equal(timedOut?.status, "timed_out");
       assert.ok(timedOut?.consequenceAppliedAt);
       assert.ok(timedOut?.dissatisfactionExpressedAt);
-      const afterTimeout = await getWorldState(companion.id);
-      assert.ok(afterTimeout.disappointment > unchanged!.disappointment);
+      const afterTimeout = await getCompanionState(companion.id);
+      assert.ok(afterTimeout.mood.disappointment > INITIAL_STATE.mood.disappointment);
 
       // A retry cannot apply the emotional consequence or create another
       // dissatisfaction candidate for the same awaiting reply.
@@ -650,9 +650,9 @@ test(
         }),
         { resolved: 1 },
       );
-      const afterExplanation = await getWorldState(companion.id);
-      assert.ok(afterExplanation.disappointment < afterTimeout.disappointment);
-      assert.ok(afterExplanation.disappointment > 0);
+      const afterExplanation = await getCompanionState(companion.id);
+      assert.ok(afterExplanation.mood.disappointment < afterTimeout.mood.disappointment);
+      assert.ok(afterExplanation.mood.disappointment > 0);
     } finally {
       await db.delete(users).where(eq(users.id, user.id));
       await closeDb();

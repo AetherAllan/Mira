@@ -1,7 +1,6 @@
 import { Ban, Check, Clock3, ShieldX } from "lucide-react";
 import type { DashboardProactiveLog } from "@/components/dashboard/data";
 import { formatDate } from "@/components/dashboard/format";
-import { JsonInspector } from "@/components/dashboard/JsonInspector";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/dashboard/ui";
 
@@ -23,11 +22,9 @@ export function ProactiveLogTable({ logs }: { logs: DashboardProactiveLog[] }) {
             <p className="mt-3 text-xs leading-5 text-zinc-300">{log.reason}</p>
             {blocks.length ? <div className="mt-2 flex items-center gap-2 text-[10px] text-amber-300/70"><ShieldX className="size-3" /> blocked by {blocks.join(" + ")}</div> : <div className="mt-2 flex items-center gap-2 text-[10px] text-zinc-600"><Clock3 className="size-3" /> all gates passed</div>}
             {log.sentText ? <p className="mt-3 rounded border border-violet-400/10 bg-violet-400/[0.035] p-3 text-xs leading-5 text-violet-100/75">{log.sentText}</p> : null}
-            <div className="mt-3"><JsonInspector data={log.selectedSeedJson} label="selected seed" /></div>
           </article>
         );
       })}
     </div>
   );
 }
-

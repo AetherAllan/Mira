@@ -6,7 +6,6 @@ import type {
   MessageAnalysis,
   MessageRole,
   RuntimeConfig,
-  SeedCard,
   TopicEntropy,
 } from "@/core/types";
 import { getDashboardSnapshot } from "@/db/repo";
@@ -47,7 +46,6 @@ export interface DashboardMemory {
 
 export interface DashboardWorldEvent {
   id: string;
-  seedId?: string | null;
   title: string;
   content: string;
   moodImpactJson: Record<string, number>;
@@ -55,18 +53,11 @@ export interface DashboardWorldEvent {
   createdAt: DateValue;
 }
 
-export interface DashboardSeed extends SeedCard {
-  id: string;
-  usedCount: number;
-  lastUsedAt: DateValue | null;
-}
-
 export interface DashboardProactiveLog {
   id: string;
   shouldSend: boolean;
   reason: string;
   selectedMode: string | null;
-  selectedSeedJson: unknown;
   sentMessageId: string | null;
   sentText: string | null;
   quietHoursBlocked: boolean;
@@ -130,7 +121,6 @@ export interface DashboardData {
   repetitionScore: number;
   mirrorIndex: number;
   worldEvents: DashboardWorldEvent[];
-  seeds: DashboardSeed[];
   proactiveLogs: DashboardProactiveLog[];
   toolCalls: DashboardToolCall[];
   memories: DashboardMemory[];

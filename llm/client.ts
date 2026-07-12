@@ -46,7 +46,11 @@ interface JsonCallOptions<T> {
   validate: (value: JsonObject) => T | null;
   model?: string;
   temperature?: number;
+  topP?: number;
+  seed?: number;
   maxTokens?: number;
+  timeoutMs?: number;
+  responseSchema?: { name: string; schema: Record<string, unknown> };
   webSearch?: boolean;
   usageContext?: LlmUsageContext;
 }
@@ -57,7 +61,11 @@ export async function callJson<T>({
   validate,
   model = DEFAULT_CHAT_MODEL,
   temperature = 0.4,
+  topP,
+  seed,
   maxTokens = 900,
+  timeoutMs = 45_000,
+  responseSchema,
   webSearch = false,
   usageContext,
 }: JsonCallOptions<T>): Promise<JsonCallResult<T>> {
@@ -71,8 +79,20 @@ export async function callJson<T>({
     model: selectedModel,
     messages,
     temperature,
+    ...(topP === undefined ? {} : { top_p: topP }),
+    ...(seed === undefined ? {} : { seed }),
     max_tokens: maxTokens,
-    response_format: { type: "json_object" },
+    response_format: responseSchema
+      ? {
+          type: "json_schema",
+          json_schema: {
+            name: responseSchema.name,
+            strict: true,
+            schema: responseSchema.schema,
+          },
+        }
+      : { type: "json_object" },
+    ...(responseSchema ? { provider: { require_parameters: true } } : {}),
     // ponytail: Nemotron defaults to thinking; effort none kills the latency tax
     reasoning: { effort: "none" },
     ...(webSearchEnabled
@@ -126,7 +146,7 @@ export async function callJson<T>({
         "X-Title": "Mira",
       },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     const body = (await response.json()) as ChatCompletionResponse & {

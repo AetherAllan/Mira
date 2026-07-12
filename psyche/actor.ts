@@ -13,11 +13,8 @@ const MEMORY_KINDS: MemoryKind[] = [
 
 function fallbackMessage(input: ActorPromptInput): string {
   if (input.plan.action === "proactive_message") {
-    if (input.selectedSeed) {
-      return input.plan.mode === "inner_world_scene" || input.plan.mode === "photo_share"
-        ? `内在世界里冒出一个场景：${input.selectedSeed.text}`
-        : input.selectedSeed.text;
-    }
+    const candidate = input.groundedContext?.shareCandidate?.contentSummary;
+    if (typeof candidate === "string" && candidate.trim()) return candidate;
     return "刚想到一件小事：今天只推进一个最小动作，也比同时拖着五个宏大计划诚实。";
   }
   if (input.analysis?.intent === "technical_discussion") {
@@ -26,13 +23,14 @@ function fallbackMessage(input: ActorPromptInput): string {
   if (input.analysis?.emotion === "distressed") {
     return "先别急着把整件事解释清楚。挑眼前最具体、十分钟内能处理的一步；其余问题先排队。";
   }
-  return input.selectedSeed
-    ? `你这句话让我想到一个不太相干但更有意思的切面：${input.selectedSeed.text}`
+  const candidate = input.groundedContext?.shareCandidate?.contentSummary;
+  return typeof candidate === "string" && candidate.trim()
+    ? `${candidate}。不过先说回你这句。`
     : "这件事里最值得继续看的，不是漂亮结论，而是你下一步实际会怎么做。";
 }
 
 function fallbackOutput(input: ActorPromptInput): ActorOutput {
-  const photo = input.plan.toolAllowed && input.plan.mode === "photo_share" && input.selectedSeed;
+  const photo = input.plan.toolAllowed && input.plan.mode === "photo_share";
   return {
     message: fallbackMessage(input),
     factClaims: [],
@@ -42,7 +40,9 @@ function fallbackOutput(input: ActorPromptInput): ActorOutput {
       ? {
           name: "generate_fake_photo",
           arguments: {
-            scene: input.selectedSeed?.text ?? "一段未完成的内在世界场景",
+            scene: typeof input.groundedContext?.shareCandidate?.contentSummary === "string"
+              ? input.groundedContext.shareCandidate.contentSummary
+              : "一段未完成的内在世界场景",
             mood: "克制、略带颗粒感",
             style: "像记忆，不像广告",
           },

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gt, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { getDb } from "@/db/client";
-import { innerThoughts, shareCandidates } from "@/db/schema";
+import { innerThoughts, proactiveLogs, shareCandidates } from "@/db/schema";
 import type { ShareCandidate } from "@/world/types";
 
 export function shareCandidateRowToDomain(
@@ -78,6 +78,23 @@ export async function listPendingShareCandidates(
     .orderBy(asc(shareCandidates.priority), desc(shareCandidates.createdAt))
     .limit(Math.max(1, Math.min(limit, 100)));
   return rows.map(shareCandidateRowToDomain);
+}
+
+export async function countTodayLifeShares(
+  companionId: string,
+  timeZone = "Asia/Shanghai",
+) {
+  const [row] = await getDb()
+    .select({ value: count() })
+    .from(proactiveLogs)
+    .innerJoin(shareCandidates, eq(proactiveLogs.sourceId, shareCandidates.id))
+    .where(and(
+      eq(proactiveLogs.companionId, companionId),
+      inArray(shareCandidates.sourceType, ["inner_thought", "world_event", "open_loop"]),
+      sql`(${proactiveLogs.createdAt} AT TIME ZONE ${timeZone})::date = (NOW() AT TIME ZONE ${timeZone})::date`,
+      sql`${proactiveLogs.sentMessageId} IS NOT NULL`,
+    ));
+  return row?.value ?? 0;
 }
 
 export async function updateShareCandidateScore(id: string, score: number) {
@@ -165,6 +182,29 @@ export async function markShareCandidateShared(input: {
       await tx
         .update(innerThoughts)
         .set({ status: "shared", updatedAt: now })
+        .where(eq(innerThoughts.id, row.sourceId));
+    }
+    return true;
+  });
+}
+
+export async function markPendingCandidateSharedInReply(
+  id: string,
+  messageId: string,
+  now = new Date(),
+) {
+  return getDb().transaction(async (tx) => {
+    const [row] = await tx.update(shareCandidates).set({
+      status: "shared",
+      sharedMessageId: messageId,
+      updatedAt: now,
+    }).where(and(
+      eq(shareCandidates.id, id),
+      eq(shareCandidates.status, "pending"),
+    )).returning();
+    if (!row) return false;
+    if (row.sourceType === "inner_thought") {
+      await tx.update(innerThoughts).set({ status: "shared", updatedAt: now })
         .where(eq(innerThoughts.id, row.sourceId));
     }
     return true;

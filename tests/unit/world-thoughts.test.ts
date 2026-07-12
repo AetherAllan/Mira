@@ -30,6 +30,7 @@ test("a persisted consequential event creates a replayable thought and share can
   const replay = buildThoughtAndShareCandidate(event);
 
   assert.ok(first);
+  assert.ok(first.candidate);
   assert.deepEqual(first, replay);
   assert.equal(first.candidate.sourceId, first.thought.id);
   assert.match(first.candidate.contentSummary, /公园计划/);

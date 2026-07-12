@@ -78,6 +78,20 @@
       "when": 1783819378424,
       "tag": "0010_llm_exchange_bodies",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1783837458461,
+      "tag": "0011_autonomous_world",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1783838220933,
+      "tag": "0012_drop_legacy_world",
+      "breakpoints": true
     }
   ]
 }

@@ -20,6 +20,7 @@ import {
 import { buildTemporalContext, localDateAt, systemClock, zonedDateTime } from "@/platform/time";
 import { catchUpCompanionWorld } from "@/world/tick";
 import { rankExternalInformation } from "@/core/externalRelevance";
+import { listDailyPlanContext } from "@/world/dailyPlan";
 
 export async function buildActorGroundedContext(input: {
   companionId: string;
@@ -44,7 +45,7 @@ export async function buildActorGroundedContext(input: {
   if (initialWorld && now.getTime() - initialWorld.lastWorldTickAt.getTime() > 30 * 60_000) {
     await catchUpCompanionWorld(input.companionId, now).catch(() => null);
   }
-  const [worldRows, places, schedule, workingMemory, openLoops, eventRows, infoRows, recentRows, candidateRows] =
+  const [worldRows, places, schedule, workingMemory, openLoops, eventRows, infoRows, recentRows, candidateRows, dailyPlan] =
     await Promise.all([
       db.select().from(worldStates).where(eq(worldStates.companionId, input.companionId)).limit(1),
       db.select().from(knownPlaces).where(eq(knownPlaces.companionId, input.companionId)),
@@ -100,7 +101,17 @@ export async function buildActorGroundedContext(input: {
               ),
             )
             .limit(1)
-        : Promise.resolve([]),
+        : db
+            .select()
+            .from(shareCandidates)
+            .where(and(
+              eq(shareCandidates.companionId, input.companionId),
+              eq(shareCandidates.status, "pending"),
+              or(isNull(shareCandidates.expiresAt), gt(shareCandidates.expiresAt, now)),
+            ))
+            .orderBy(shareCandidates.priority, desc(shareCandidates.eventImportance), desc(shareCandidates.createdAt))
+            .limit(1),
+      listDailyPlanContext(input.companionId, localDate),
     ]);
   const world = worldRows[0];
   if (!world) throw new Error("Actor grounding requires a persistent world state");
@@ -151,6 +162,7 @@ export async function buildActorGroundedContext(input: {
     ...worldFacts.flatMap((event) => [event.id, ...(event.locationId ? [event.locationId] : []), ...event.characterIds]),
     ...externalFacts.map((fact) => fact.id),
     ...(candidate ? [candidate.id, candidate.sourceId] : []),
+    ...(dailyPlan ? [dailyPlan.plan.id, ...dailyPlan.events.map((event) => event.id)] : []),
   ]);
   if (currentPlace) allowedReferenceIds.add(currentPlace.id);
 
@@ -190,7 +202,27 @@ export async function buildActorGroundedContext(input: {
       status: block.status,
       changeReason: block.changeReason,
     })),
-    emotionReasons: world.emotionReasonsJson,
+    emotionReasons: input.state.stateReasons,
+    dailyPlan: dailyPlan
+      ? {
+          id: dailyPlan.plan.id,
+          date: dailyPlan.plan.localDate,
+          dayType: dailyPlan.plan.dayType,
+          weekendMode: dailyPlan.plan.weekendMode ?? null,
+          theme: dailyPlan.plan.theme,
+          summary: dailyPlan.plan.summary,
+          events: dailyPlan.events.map((event) => ({
+            id: event.id,
+            slot: event.slot,
+            type: event.eventType,
+            title: event.title,
+            windowStart: event.windowStart.toISOString(),
+            windowEnd: event.windowEnd.toISOString(),
+            status: event.status,
+            selectionReason: event.selectionReason ?? null,
+          })),
+        }
+      : null,
     workingMemory: workingMemory
       ? {
           currentTopic: workingMemory.currentTopic,
@@ -202,7 +234,10 @@ export async function buildActorGroundedContext(input: {
           lastUpdatedAt: workingMemory.lastUpdatedAt.toISOString(),
         }
       : null,
-    openLoops: openLoops.map((loop) => ({
+    openLoops: [
+      ...openLoops.filter((loop) => loop.owner !== "user"),
+      ...openLoops.filter((loop) => loop.owner === "user").slice(0, 2),
+    ].map((loop) => ({
       id: loop.id,
       owner: loop.owner,
       topic: loop.topic,

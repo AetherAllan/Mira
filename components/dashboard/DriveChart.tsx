@@ -14,7 +14,7 @@ function normalize(history: Array<Record<string, string | number>>) {
   });
 }
 
-export function DriveChart({ history, metrics = ["curiosity", "aestheticUrge", "noveltySeeking", "boredom"] }: { history: Array<Record<string, string | number>>; metrics?: Array<keyof Drives> }) {
+export function DriveChart({ history, metrics = ["affection", "aestheticUrge", "noveltySeeking", "shareDesire"] }: { history: Array<Record<string, string | number>>; metrics?: Array<keyof Drives> }) {
   const data = normalize(history);
   return (
     <div>
@@ -44,4 +44,3 @@ export function DriveChart({ history, metrics = ["curiosity", "aestheticUrge", "
     </div>
   );
 }
-

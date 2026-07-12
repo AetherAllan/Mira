@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isEchoReply } from "@/core/metrics";
-import type { DailyReflection, SeedCard } from "@/core/types";
+import type { DailyReflection } from "@/core/types";
 import { detectCrisis } from "@/psyche/analyzer";
 import { applyDailyReflection } from "@/psyche/growthEngine";
-import { selectNoveltySeed } from "@/psyche/noveltyEngine";
 import { INITIAL_STATE } from "@/seed/character";
 import { splitTelegramBubbles } from "@/messaging/bubbles";
 import { executeTool } from "@/tools/registry";
@@ -55,7 +54,6 @@ test("daily reflection hard-clamps trait drift to 0.01", () => {
     relationshipUpdates: {},
     traitUpdates: { initiative: 0.9, warmth: -0.9 },
     arcUpdates: [],
-    tomorrowSeeds: [],
     relationshipSummary: "",
     placePreferenceUpdates: [],
     interestUpdates: { added: [], cooled: [] },
@@ -72,22 +70,4 @@ test("tool registry rejects model-invented tools", async () => {
   const result = await executeTool({ name: "shell", arguments: {} });
   assert.equal(result.ok, false);
   assert.equal(result.error, "Tool is not registered");
-});
-
-test("novelty engine prefers unused seeds over heavily used ones", () => {
-  const seeds: SeedCard[] = [
-    { type: "opinion_seed", text: "used a lot", tags: ["a"], weight: 1, usedCount: 20, lastUsedAt: null },
-    { type: "opinion_seed", text: "fresh", tags: ["b"], weight: 1, usedCount: 0, lastUsedAt: null },
-  ];
-  const counts = { "used a lot": 0, fresh: 0 };
-  for (let i = 0; i < 80; i++) {
-    const picked = selectNoveltySeed(seeds, {
-      state: INITIAL_STATE,
-      required: true,
-      now: new Date("2026-07-10T12:00:00Z"),
-    });
-    assert.ok(picked);
-    counts[picked!.text as keyof typeof counts] += 1;
-  }
-  assert.ok(counts.fresh > counts["used a lot"]);
 });

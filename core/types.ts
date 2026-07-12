@@ -27,17 +27,31 @@ export interface Mood {
   concern: number;
   playfulness: number;
   boredom: number;
+  loneliness: number;
+  irritation: number;
+  disappointment: number;
 }
 
 export interface Drives {
-  curiosity: number;
   affection: number;
-  playfulness: number;
-  boredom: number;
-  concern: number;
   aestheticUrge: number;
   noveltySeeking: number;
+  shareDesire: number;
 }
+
+export type StateDimension = keyof Mood | keyof Drives;
+
+export interface StateReason {
+  reason: string;
+  sourceType: "schedule" | "world_event" | "awaiting_reply" | "user_message" | "reflection";
+  sourceId?: string;
+  correlationId: string;
+  impact: number;
+  occurredAt: string;
+  expiresAt: string;
+}
+
+export type StateReasons = Partial<Record<StateDimension, StateReason[]>>;
 
 export interface Relationship {
   closeness: number;
@@ -62,6 +76,8 @@ export interface CompanionState {
   drives: Drives;
   relationship: Relationship;
   activeArcs: ActiveArc[];
+  stateReasons: StateReasons;
+  version: number;
 }
 
 export interface Topic {
@@ -108,23 +124,10 @@ export type ActionMode =
   | "playful_challenge"
   | "emotional_support";
 
-export interface SeedCard {
-  id?: string;
-  type: string;
-  text: string;
-  tags: string[];
-  weight?: number;
-  enabled?: boolean;
-  usedCount?: number;
-  lastUsedAt?: Date | string | null;
-}
-
 export interface ActionPlan {
   action: "reply" | "proactive_message" | "do_nothing";
   mode: ActionMode;
   memoryBudget: "none" | "light" | "medium" | "heavy";
-  noveltyBudget: "none" | "light" | "medium";
-  selectedSeed: SeedCard | null;
   toolAllowed: boolean;
   webAccess?: "none" | "search";
   styleHints: string[];
@@ -202,7 +205,7 @@ export interface PolicyConfig {
 }
 
 export interface RuntimeConfig {
-  schemaVersion: 2;
+  schemaVersion: 3;
   character: CharacterConfig;
   policy: PolicyConfig;
   model: string;
@@ -224,7 +227,6 @@ export interface DailyReflection {
   relationshipUpdates: Partial<Relationship>;
   traitUpdates: Partial<Traits>;
   arcUpdates: Array<{ id: string; progressDelta: number; currentQuestion?: string }>;
-  tomorrowSeeds: SeedCard[];
   relationshipSummary: string;
   placePreferenceUpdates: Array<{
     placeId: string;

@@ -27,11 +27,11 @@ export function selectRelevantMemories(
   rows: MemoryLike[],
   userMessage: string,
   analysis: MessageAnalysis,
-  limit = 4,
+  limit = 8,
   now = new Date(),
 ): SelectedMemory[] {
   const query = words(`${userMessage} ${analysis.topics.map((topic) => topic.name).join(" ")}`);
-  return rows
+  const ranked = rows
     .filter((row) => !row.cooldownUntil || new Date(row.cooldownUntil) <= now)
     .map((row) => {
       const tagsSource = row.tagsJson ?? row.tags;
@@ -44,8 +44,11 @@ export function selectRelevantMemories(
     })
     .filter((item) => item.score >= 0.2)
     .sort((left, right) => right.score - left.score)
-    .slice(0, limit)
-    .map(({ row, tags }) => ({
+  const selected = [
+    ...ranked.filter((item) => item.row.kind === "self_memory" || item.row.kind === "world_experience").slice(0, Math.min(6, limit)),
+    ...ranked.filter((item) => item.row.kind === "user_memory" || item.row.kind === "relationship_memory").slice(0, Math.min(2, limit)),
+  ].sort((left, right) => right.score - left.score).slice(0, limit);
+  return selected.map(({ row, tags }) => ({
       id: row.id,
       kind: row.kind,
       content: row.content,

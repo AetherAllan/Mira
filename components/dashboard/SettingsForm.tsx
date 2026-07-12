@@ -17,7 +17,7 @@ export function SettingsForm({ config }: { config: RuntimeConfig }) {
   async function save(formData: FormData) {
     setBusy(true); setStatus(null);
     const payload: RuntimeConfig = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       model: String(formData.get("model")),
       character: {
         name: String(formData.get("name")),

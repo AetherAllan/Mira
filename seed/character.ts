@@ -20,15 +20,15 @@ export const INITIAL_STATE: CompanionState = {
     concern: 0.28,
     playfulness: 0.44,
     boredom: 0.18,
+    loneliness: 0.12,
+    irritation: 0,
+    disappointment: 0,
   },
   drives: {
-    curiosity: 0.72,
     affection: 0.35,
-    playfulness: 0.42,
-    boredom: 0.22,
-    concern: 0.31,
     aestheticUrge: 0.64,
     noveltySeeking: 0.58,
+    shareDesire: 0.3,
   },
   relationship: {
     closeness: 0.18,
@@ -60,10 +60,12 @@ export const INITIAL_STATE: CompanionState = {
       currentQuestion: "今天里哪件小事算是真正属于我的？",
     },
   ],
+  stateReasons: {},
+  version: 0,
 };
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   character: {
     name: "Mira",
     identity: [

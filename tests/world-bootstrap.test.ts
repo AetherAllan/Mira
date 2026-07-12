@@ -8,9 +8,9 @@ test("persistent world seed rows preserve stable place and character identities"
   const rows = buildPersistentWorldSeedRows("companion-1", now);
 
   assert.equal(rows.places.length, 20);
-  assert.equal(rows.characters.length, 4);
+  assert.equal(rows.characters.length, 9);
   assert.equal(new Set(rows.places.map((place) => place.canonicalKey)).size, 20);
-  assert.equal(new Set(rows.characters.map((character) => character.stableKey)).size, 4);
+  assert.equal(new Set(rows.characters.map((character) => character.stableKey)).size, 9);
   assert.ok(
     rows.places.some((place) => place.canonicalKey === DEFAULT_CHARACTER_PROFILE.homePlaceKey),
   );

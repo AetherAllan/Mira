@@ -5,10 +5,7 @@ import type {
   ScheduleBlock,
   ScheduleBlockType,
   TripFeasibility,
-  WorldAffect,
   WorldEvent,
-  WorldState,
-  WorldStateChange,
 } from "@/world/types";
 
 type OrdinaryEventType = Extract<WorldEvent["type"], "routine" | "work" | "social" | "travel">;
@@ -227,48 +224,4 @@ export function validatePhysicalWorldEvent(
   }
 
   return { valid: reasons.length === 0, reasons: [...new Set(reasons)] };
-}
-
-const WORLD_AFFECTS: readonly WorldAffect[] = [
-  "energy",
-  "boredom",
-  "curiosity",
-  "loneliness",
-  "irritation",
-  "disappointment",
-  "attachment",
-  "shareDesire",
-];
-
-export function applyEventConsequences(state: WorldState, event: WorldEvent) {
-  const next: WorldState = { ...state, affectReasons: { ...state.affectReasons } };
-  const stateChanges: WorldStateChange[] = [];
-  const reason = `world_event:${event.id}:${event.title}`;
-
-  for (const affect of WORLD_AFFECTS) {
-    const delta = event.emotionalImpact[affect];
-    if (!Number.isFinite(delta) || delta === 0) continue;
-    const before = state[affect];
-    const after = clamp01(before + delta);
-    if (before === after) continue;
-    next[affect] = after;
-    next.affectReasons![affect] = [
-      ...(state.affectReasons?.[affect] ?? []),
-      {
-        reason: event.title,
-        sourceType: "world_event" as const,
-        sourceId: event.id,
-        correlationId: event.correlationId,
-        occurredAt: event.occurredAt,
-      },
-    ].slice(-8);
-    stateChanges.push({ targetPath: affect, before, after, reason });
-  }
-
-  if (stateChanges.length) {
-    next.version = state.version + 1;
-    next.lastChangeReason = reason;
-    next.lastCorrelationId = event.correlationId;
-  }
-  return { state: next, stateChanges, pendingConsequences: [...event.consequences] };
 }

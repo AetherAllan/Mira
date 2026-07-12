@@ -6,7 +6,6 @@ import type {
   Mood,
   Relationship,
   RuntimeConfig,
-  SeedCard,
   Traits,
   MessageAnalysis,
 } from "@/core/types";
@@ -34,15 +33,22 @@ const TRAIT_KEYS: Array<keyof Traits> = [
   "independence",
   "emotionalVolatility",
 ];
-const MOOD_KEYS: Array<keyof Mood> = ["valence", "energy", "curiosity", "concern", "playfulness", "boredom"];
-const DRIVE_KEYS: Array<keyof Drives> = [
+const MOOD_KEYS: Array<keyof Mood> = [
+  "valence",
+  "energy",
   "curiosity",
-  "affection",
+  "concern",
   "playfulness",
   "boredom",
-  "concern",
+  "loneliness",
+  "irritation",
+  "disappointment",
+];
+const DRIVE_KEYS: Array<keyof Drives> = [
+  "affection",
   "aestheticUrge",
   "noveltySeeking",
+  "shareDesire",
 ];
 type NumericRelationshipKey = Exclude<keyof Relationship, "stage">;
 const RELATIONSHIP_KEYS: NumericRelationshipKey[] = [
@@ -90,20 +96,22 @@ function changed<T extends object>(
   return { targetPath, beforeJson: before, afterJson: after, deltaJson, reason, causedBy };
 }
 
-export function applyInteractionGrowth(state: CompanionState, analysis: MessageAnalysis): {
+export function applyInteractionGrowth(
+  state: CompanionState,
+  analysis: MessageAnalysis,
+  correlationId = "00000000-0000-4000-8000-000000000000",
+  occurredAt = new Date(),
+): {
   state: CompanionState;
   changes: StateChangeDraft[];
 } {
   const mood = { ...state.mood };
-  const drives = { ...state.drives };
   const relationship = { ...state.relationship };
 
-  mood.curiosity = clamp(mood.curiosity + (analysis.novelty - 0.5) * 0.035);
-  mood.concern = clamp(mood.concern + (analysis.emotion === "distressed" ? 0.035 : -0.008));
-  mood.boredom = clamp(mood.boredom - Math.max(0.01, analysis.novelty * 0.025));
-  drives.curiosity = clamp(drives.curiosity + (analysis.novelty - 0.5) * 0.02);
-  drives.concern = clamp(drives.concern + (analysis.emotion === "distressed" ? 0.025 : -0.004));
-  drives.boredom = clamp(drives.boredom - 0.018);
+  // A user message may matter, but it must not overwrite Mira's day. World
+  // events and schedule activity are the primary source of short-term affect.
+  mood.curiosity = clamp(mood.curiosity + (analysis.novelty - 0.5) * 0.012);
+  mood.concern = clamp(mood.concern + (analysis.emotion === "distressed" ? 0.02 : -0.004));
   relationship.familiarity = clamp(relationship.familiarity + 0.004 + analysis.importance * 0.004);
   relationship.trust = clamp(relationship.trust + analysis.importance * 0.003);
   relationship.friendshipAffinity = clamp(relationship.friendshipAffinity + 0.004);
@@ -129,10 +137,25 @@ export function applyInteractionGrowth(state: CompanionState, analysis: MessageA
             ? "friendship"
             : "new";
 
-  const next = { ...state, mood, drives, relationship };
+  const stateReasons = { ...state.stateReasons };
+  for (const dimension of ["curiosity", "concern"] as const) {
+    const impact = mood[dimension] - state.mood[dimension];
+    if (impact === 0) continue;
+    stateReasons[dimension] = [
+      ...(stateReasons[dimension] ?? []).filter((reason) => new Date(reason.expiresAt) > occurredAt),
+      {
+        reason: dimension === "concern" ? "用户表达的情绪需要留意" : "用户带来了新的信息",
+        sourceType: "user_message" as const,
+        correlationId,
+        impact,
+        occurredAt: occurredAt.toISOString(),
+        expiresAt: new Date(occurredAt.getTime() + 72 * 60 * 60_000).toISOString(),
+      },
+    ].slice(-5);
+  }
+  const next = { ...state, mood, relationship, stateReasons, version: state.version + 1 };
   const changes = [
     changed("mood", state.mood, mood, "user message changed short-term affect", "user.message"),
-    changed("drives", state.drives, drives, "interaction satisfied or raised current drives", "user.message"),
     changed("relationship", state.relationship, relationship, "bounded familiarity update", "user.message"),
   ].filter((item): item is StateChangeDraft => item !== null);
   return { state: next, changes };
@@ -144,11 +167,11 @@ export function applyProactiveGrowth(state: CompanionState): {
 } {
   const drives = {
     ...state.drives,
-    boredom: clamp(state.drives.boredom - 0.04),
     noveltySeeking: clamp(state.drives.noveltySeeking - 0.025),
+    shareDesire: clamp(state.drives.shareDesire - 0.08),
   };
   const mood = { ...state.mood, boredom: clamp(state.mood.boredom - 0.03) };
-  const next = { ...state, drives, mood };
+  const next = { ...state, drives, mood, version: state.version + 1 };
   const changes = [
     changed("drives", state.drives, drives, "a proactive action discharged novelty pressure", "proactive.sent"),
     changed("mood", state.mood, mood, "proactive action reduced boredom", "proactive.sent"),
@@ -200,7 +223,15 @@ export function applyDailyReflection(state: CompanionState, reflection: DailyRef
       currentQuestion: update.currentQuestion?.trim() || arc.currentQuestion,
     };
   });
-  const next = { traits, mood, drives, relationship, activeArcs };
+  const next = {
+    ...state,
+    traits,
+    mood,
+    drives,
+    relationship,
+    activeArcs,
+    version: state.version + 1,
+  };
   const changes = [
     changed("traits", state.traits, traits, "daily reflection personality drift (max 0.01 per trait)", "daily.reflection"),
     changed("mood", state.mood, mood, "daily reflection", "daily.reflection"),
@@ -209,22 +240,6 @@ export function applyDailyReflection(state: CompanionState, reflection: DailyRef
     changed("activeArcs", state.activeArcs, activeArcs, "daily arc progress", "daily.reflection"),
   ].filter((item): item is StateChangeDraft => item !== null);
   return { state: next, changes };
-}
-
-function validateSeeds(value: unknown): SeedCard[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map(asObject)
-    .filter((seed): seed is JsonObject => seed !== null)
-    .map((seed) => ({
-      type: asString(seed.type),
-      text: asString(seed.text),
-      tags: asStringArray(seed.tags).slice(0, 8),
-      weight: 1,
-      enabled: true,
-    }))
-    .filter((seed) => seed.type && seed.text)
-    .slice(0, 5);
 }
 
 function validatePlacePreferenceUpdates(value: unknown): DailyReflection["placePreferenceUpdates"] {
@@ -279,7 +294,6 @@ function validateReflection(value: JsonObject): DailyReflection | null {
     relationshipUpdates: parseUpdates(value.relationshipUpdates, RELATIONSHIP_KEYS, 0.03),
     traitUpdates: parseUpdates(value.traitUpdates, TRAIT_KEYS, 0.01),
     arcUpdates,
-    tomorrowSeeds: validateSeeds(value.tomorrowSeeds),
     relationshipSummary: asString(value.relationshipSummary).slice(0, 1_000),
     placePreferenceUpdates: validatePlacePreferenceUpdates(value.placePreferenceUpdates),
     interestUpdates: {
@@ -306,15 +320,6 @@ export async function reflectOnDay(
     relationshipUpdates: {},
     traitUpdates: {},
     arcUpdates: [],
-    tomorrowSeeds: [
-      {
-        type: "inner_question",
-        text: "今天有哪些细节值得留下，而不是把整天都存进记忆？",
-        tags: ["memory", "boundary", "inner_world"],
-        weight: 1,
-        enabled: true,
-      },
-    ],
     relationshipSummary: "关系没有出现需要改写长期判断的新证据。",
     placePreferenceUpdates: [],
     interestUpdates: { added: [], cooled: [] },

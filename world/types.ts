@@ -26,44 +26,62 @@ export type ScheduleBlockSource =
   | "mira_decision"
   | "external_information";
 
-export type WorldAffect =
-  | "energy"
-  | "boredom"
-  | "curiosity"
-  | "loneliness"
-  | "irritation"
-  | "disappointment"
-  | "attachment"
-  | "shareDesire";
-
-export interface AffectReason {
-  reason: string;
-  sourceType: "schedule" | "world_event" | "awaiting_reply" | "user_message" | "natural_decay";
-  sourceId?: string;
-  correlationId: string;
-  occurredAt: Date;
-}
-
 export interface WorldState {
   companionId: string;
   currentTime: Date;
   currentLocationId?: string;
   currentActivityId?: string;
   currentScheduleBlockId?: string;
-  energy: number;
-  boredom: number;
-  curiosity: number;
-  loneliness: number;
-  irritation: number;
-  disappointment: number;
-  attachment: number;
-  shareDesire: number;
-  affectReasons?: Partial<Record<WorldAffect, AffectReason[]>>;
   lastChangeReason?: string;
   lastCorrelationId?: string;
   lastWorldTickAt: Date;
   lastDailyPlanAt?: Date;
   version: number;
+}
+
+export type DailyPlanDayType = "workday" | "restday";
+export type WeekendMode = "outing" | "flexible";
+
+export interface DailyLifePlan {
+  id: string;
+  companionId: string;
+  localDate: string;
+  dayType: DailyPlanDayType;
+  weekendMode?: WeekendMode;
+  theme: string;
+  summary: string;
+  samplingSeed: number;
+  fingerprints: string[];
+  validation: Record<string, unknown>;
+  status: "generating" | "ready" | "fallback" | "completed" | "failed";
+  generationAttempt: number;
+  correlationId?: string;
+}
+
+export interface PlannedWorldEvent {
+  id: string;
+  planId: string;
+  companionId: string;
+  idempotencyKey: string;
+  slot: "required" | "candidate";
+  weight: number;
+  eventType: WorldEvent["type"];
+  title: string;
+  description: string;
+  windowStart: Date;
+  windowEnd: Date;
+  locationId?: string;
+  characterIds: string[];
+  emotionalImpact: Record<string, number>;
+  consequences: string[];
+  innerNarrative: string;
+  loop: Record<string, unknown>;
+  importance: number;
+  sharePotential: number;
+  status: "planned" | "selected" | "occurred" | "skipped";
+  selectionReason?: string;
+  occurredEventId?: string;
+  correlationId?: string;
 }
 
 export interface ScheduleBlock {

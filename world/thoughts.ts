@@ -22,7 +22,8 @@ function thoughtContent(event: WorldEvent) {
 
 export function buildThoughtAndShareCandidate(
   event: WorldEvent,
-): { thought: InnerThought; candidate: ShareCandidate } | null {
+  innerNarrative?: string,
+): { thought: InnerThought; candidate: ShareCandidate | null } | null {
   if (event.importance < 0.3 && event.sharePotential < 0.28) return null;
   const thoughtKey = createWorldSeed(event.idempotencyKey, "inner-thought-v1");
   const thoughtId = deterministicUuid(thoughtKey);
@@ -35,7 +36,7 @@ export function buildThoughtAndShareCandidate(
     companionId: event.companionId,
     sourceType: "world_event",
     sourceId: event.id,
-    content: thoughtContent(event),
+    content: innerNarrative?.trim() || thoughtContent(event),
     topic: event.type,
     emotionalIntensity: clamp01(
       event.importance * 0.35 + event.sharePotential * 0.55 + strongestImpact * 1.5,
@@ -44,10 +45,13 @@ export function buildThoughtAndShareCandidate(
     novelty: clamp01(0.35 + event.importance * 0.4 + event.sharePotential * 0.2),
     intimacy: clamp01(0.15 + event.sharePotential * 0.45),
     createdAt: event.occurredAt,
-    expiresAt: new Date(event.occurredAt.getTime() + 12 * 60 * 60_000),
+    expiresAt: new Date(event.occurredAt.getTime() + 36 * 60 * 60_000),
     status: "active",
     correlationId: event.correlationId,
   };
+  if (event.importance < 0.55 && event.sharePotential < 0.6) {
+    return { thought, candidate: null };
+  }
   const candidateKey = createWorldSeed(thoughtKey, "share-candidate-v1");
   const candidate: ShareCandidate = {
     id: deterministicUuid(candidateKey),

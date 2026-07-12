@@ -20,6 +20,7 @@ import type {
   Mood,
   Relationship,
   RuntimeConfig,
+  StateReasons,
   Traits,
 } from "@/core/types";
 
@@ -69,6 +70,8 @@ export const companionStates = pgTable(
     drivesJson: jsonb("drives_json").$type<Drives>().notNull(),
     relationshipJson: jsonb("relationship_json").$type<Relationship>().notNull(),
     activeArcsJson: jsonb("active_arcs_json").$type<ActiveArc[]>().notNull(),
+    stateReasonsJson: jsonb("state_reasons_json").$type<StateReasons>().notNull().default({}),
+    version: integer("version").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -228,28 +231,6 @@ export const events = pgTable(
   ],
 );
 
-export const eventSeeds = pgTable(
-  "event_seeds",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    companionId: uuid("companion_id")
-      .notNull()
-      .references(() => companions.id, { onDelete: "cascade" }),
-    type: text("type").notNull(),
-    text: text("text").notNull(),
-    tagsJson: jsonb("tags_json").$type<string[]>().notNull().default([]),
-    weight: real("weight").notNull().default(1),
-    enabled: boolean("enabled").notNull().default(true),
-    usedCount: integer("used_count").notNull().default(0),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    createdAt: createdAt(),
-  },
-  (table) => [
-    index("event_seeds_companion_enabled_idx").on(table.companionId, table.enabled),
-    uniqueIndex("event_seeds_companion_text_idx").on(table.companionId, table.text),
-  ],
-);
-
 export const knownPlaces = pgTable(
   "known_places",
   {
@@ -404,18 +385,6 @@ export const worldStates = pgTable(
     currentScheduleBlockId: uuid("current_schedule_block_id").references(() => scheduleBlocks.id, {
       onDelete: "set null",
     }),
-    energy: real("energy").notNull().default(0.65),
-    boredom: real("boredom").notNull().default(0.15),
-    curiosity: real("curiosity").notNull().default(0.72),
-    loneliness: real("loneliness").notNull().default(0.12),
-    irritation: real("irritation").notNull().default(0),
-    disappointment: real("disappointment").notNull().default(0),
-    attachment: real("attachment").notNull().default(0.18),
-    shareDesire: real("share_desire").notNull().default(0.3),
-    emotionReasonsJson: jsonb("emotion_reasons_json")
-      .$type<Record<string, unknown>>()
-      .notNull()
-      .default({}),
     lastChangeReason: text("last_change_reason"),
     lastCorrelationId: uuid("last_correlation_id"),
     lastWorldTickAt: timestamp("last_world_tick_at", { withTimezone: true }).defaultNow().notNull(),
@@ -427,6 +396,80 @@ export const worldStates = pgTable(
   (table) => [
     uniqueIndex("world_states_companion_id_idx").on(table.companionId),
     index("world_states_last_tick_idx").on(table.lastWorldTickAt),
+  ],
+);
+
+export const dailyLifePlans = pgTable(
+  "daily_life_plans",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    localDate: date("local_date").notNull(),
+    dayType: text("day_type", { enum: ["workday", "restday"] }).notNull(),
+    weekendMode: text("weekend_mode", { enum: ["outing", "flexible"] }),
+    theme: text("theme").notNull(),
+    summary: text("summary").notNull(),
+    samplingSeed: integer("sampling_seed").notNull(),
+    fingerprintJson: jsonb("fingerprint_json").$type<string[]>().notNull().default([]),
+    validationJson: jsonb("validation_json").$type<Record<string, unknown>>().notNull().default({}),
+    status: text("status", { enum: ["generating", "ready", "fallback", "completed", "failed"] })
+      .notNull()
+      .default("generating"),
+    generationAttempt: integer("generation_attempt").notNull().default(1),
+    correlationId: uuid("correlation_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("daily_life_plans_companion_date_idx").on(table.companionId, table.localDate),
+    index("daily_life_plans_status_date_idx").on(table.status, table.localDate),
+  ],
+);
+
+export const plannedWorldEvents = pgTable(
+  "planned_world_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    planId: uuid("plan_id")
+      .notNull()
+      .references(() => dailyLifePlans.id, { onDelete: "cascade" }),
+    companionId: uuid("companion_id")
+      .notNull()
+      .references(() => companions.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    slot: text("slot", { enum: ["required", "candidate"] }).notNull(),
+    weight: real("weight").notNull().default(0.5),
+    eventType: text("event_type", {
+      enum: ["routine", "work", "social", "external", "weather", "travel", "accident", "thought", "user_influenced"],
+    }).notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+    locationId: uuid("location_id").references(() => knownPlaces.id, { onDelete: "set null" }),
+    characterIdsJson: jsonb("character_ids_json").$type<string[]>().notNull().default([]),
+    emotionalImpactJson: jsonb("emotional_impact_json").$type<Record<string, number>>().notNull().default({}),
+    consequencesJson: jsonb("consequences_json").$type<string[]>().notNull().default([]),
+    innerNarrative: text("inner_narrative").notNull(),
+    loopJson: jsonb("loop_json").$type<Record<string, unknown>>().notNull().default({}),
+    importance: real("importance").notNull(),
+    sharePotential: real("share_potential").notNull(),
+    status: text("status", { enum: ["planned", "selected", "occurred", "skipped"] })
+      .notNull()
+      .default("planned"),
+    selectionReason: text("selection_reason"),
+    occurredEventId: uuid("occurred_event_id"),
+    correlationId: uuid("correlation_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (table) => [
+    uniqueIndex("planned_world_events_companion_key_idx").on(table.companionId, table.idempotencyKey),
+    index("planned_world_events_plan_window_idx").on(table.planId, table.windowStart),
+    index("planned_world_events_companion_status_window_idx").on(table.companionId, table.status, table.windowStart),
+    check("planned_world_events_valid_window", sql`${table.windowEnd} > ${table.windowStart}`),
   ],
 );
 
@@ -911,7 +954,6 @@ export const worldEvents = pgTable(
     companionId: uuid("companion_id")
       .notNull()
       .references(() => companions.id, { onDelete: "cascade" }),
-    seedId: uuid("seed_id").references(() => eventSeeds.id, { onDelete: "set null" }),
     type: text("type", {
       enum: ["routine", "work", "social", "external", "weather", "travel", "accident", "thought", "user_influenced"],
     })
@@ -968,7 +1010,6 @@ export const proactiveLogs = pgTable(
     shouldSend: boolean("should_send").notNull(),
     reason: text("reason").notNull(),
     selectedMode: text("selected_mode"),
-    selectedSeedJson: jsonb("selected_seed_json"),
     sentMessageId: uuid("sent_message_id").references(() => messages.id, { onDelete: "set null" }),
     sentText: text("sent_text"),
     quietHoursBlocked: boolean("quiet_hours_blocked").notNull().default(false),
@@ -1076,6 +1117,8 @@ export type KnownPlaceRow = typeof knownPlaces.$inferSelect;
 export type WorldCharacterRow = typeof worldCharacters.$inferSelect;
 export type ScheduleBlockRow = typeof scheduleBlocks.$inferSelect;
 export type WorldStateRow = typeof worldStates.$inferSelect;
+export type DailyLifePlanRow = typeof dailyLifePlans.$inferSelect;
+export type PlannedWorldEventRow = typeof plannedWorldEvents.$inferSelect;
 export type OpenLoopRow = typeof openLoops.$inferSelect;
 export type SharedKnowledgeRow = typeof sharedKnowledge.$inferSelect;
 export type ConversationWorkingMemoryRow = typeof conversationWorkingMemories.$inferSelect;

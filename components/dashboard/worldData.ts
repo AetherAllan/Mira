@@ -4,10 +4,12 @@ import { getDb } from "@/db/client";
 import { ensureCompanionContext } from "@/db/repo";
 import {
   awaitingReplies,
+  dailyLifePlans,
   externalInformation,
   innerThoughts,
   llmUsageLogs,
   openLoops,
+  plannedWorldEvents,
   promptContextSnapshots,
   scheduleBlocks,
   shareCandidates,
@@ -19,13 +21,13 @@ import { localDateAt, systemClock } from "@/platform/time";
 import { getWorldHealth } from "@/world/health";
 import { buildTodayWorldView } from "@/world/todayView";
 
-function publicEmotion(world: Awaited<ReturnType<typeof ensureCompanionContext>>["world"]["state"]) {
+function publicEmotion(state: Awaited<ReturnType<typeof ensureCompanionContext>>["state"]) {
   const descriptions: string[] = [];
-  if (world.energy < 0.35) descriptions.push("有点累，行动节奏偏慢");
-  else if (world.energy > 0.72) descriptions.push("精力不错");
-  if (world.disappointment > 0.2) descriptions.push("对一件尚未得到回应的事有些失落");
-  if (world.irritation > 0.2) descriptions.push("耐心比平时少一点");
-  if (world.curiosity > 0.65) descriptions.push("对今天接下来会发生什么保持好奇");
+  if (state.mood.energy < 0.35) descriptions.push("有点累，行动节奏偏慢");
+  else if (state.mood.energy > 0.72) descriptions.push("精力不错");
+  if (state.mood.disappointment > 0.2) descriptions.push("对一件尚未得到回应的事有些失落");
+  if (state.mood.irritation > 0.2) descriptions.push("耐心比平时少一点");
+  if (state.mood.curiosity > 0.65) descriptions.push("对今天接下来会发生什么保持好奇");
   return descriptions.length ? descriptions : ["状态平稳，没有明显情绪波动"];
 }
 
@@ -35,10 +37,12 @@ export async function loadWorldDashboardData(now = systemClock.now()) {
   const timeZone = context.companion.configJson.character.profile.timeZone;
   const localDate = localDateAt(now, timeZone);
   const db = getDb();
-  const [schedule, events, loops, thoughts, candidates, awaiting, external, ticks, snapshots, changes, usage, health] =
+  const [schedule, events, plans, plannedEvents, loops, thoughts, candidates, awaiting, external, ticks, snapshots, changes, usage, health] =
     await Promise.all([
       db.select().from(scheduleBlocks).where(eq(scheduleBlocks.companionId, companionId)).orderBy(asc(scheduleBlocks.startAt)).limit(40),
       db.select().from(worldEvents).where(eq(worldEvents.companionId, companionId)).orderBy(desc(worldEvents.occurredAt)).limit(100),
+      db.select().from(dailyLifePlans).where(eq(dailyLifePlans.companionId, companionId)).orderBy(desc(dailyLifePlans.localDate)).limit(14),
+      db.select().from(plannedWorldEvents).where(eq(plannedWorldEvents.companionId, companionId)).orderBy(desc(plannedWorldEvents.windowStart)).limit(100),
       db.select().from(openLoops).where(eq(openLoops.companionId, companionId)).orderBy(desc(openLoops.createdAt)).limit(50),
       db.select().from(innerThoughts).where(eq(innerThoughts.companionId, companionId)).orderBy(desc(innerThoughts.createdAt)).limit(50),
       db.select().from(shareCandidates).where(eq(shareCandidates.companionId, companionId)).orderBy(desc(shareCandidates.createdAt)).limit(50),
@@ -70,7 +74,10 @@ export async function loadWorldDashboardData(now = systemClock.now()) {
     currentPlace: today.currentPlace,
     lastConfirmedPlace: today.lastConfirmedPlace,
     currentBlock: today.currentBlock,
-    publicEmotion: publicEmotion(context.world.state),
+    state: context.state,
+    publicEmotion: publicEmotion(context.state),
+    dailyPlans: plans,
+    plannedEvents,
     schedule: todaySchedule,
     places: context.world.places,
     characters: context.world.characters,
@@ -86,6 +93,9 @@ export async function loadWorldDashboardData(now = systemClock.now()) {
     debug: {
       worldHealth: health,
       worldState: context.world.state,
+      companionState: context.state,
+      dailyPlans: plans,
+      plannedWorldEvents: plannedEvents,
       schedule,
       characters: context.world.characters,
       openLoops: loops,

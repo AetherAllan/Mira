@@ -13,6 +13,8 @@ export interface DailyScheduleInput {
   homeLocationId?: string;
   workLocationId?: string;
   optionalLocationId?: string;
+  weekendMode?: "outing" | "flexible";
+  dayType?: "workday" | "restday";
   seed?: string;
   correlationId?: string;
 }
@@ -71,7 +73,11 @@ function localMinuteToDate(day: LocalDay, minute: number) {
   return new Date(Date.UTC(day.year, day.month - 1, day.day, 0, minute) - 8 * 60 * 60 * 1000);
 }
 
-function optionalBlock(dayType: "workday" | "weekend", seed: string): BlockTemplate {
+function optionalBlock(
+  dayType: "workday" | "weekend",
+  seed: string,
+  weekendMode?: "outing" | "flexible",
+): BlockTemplate {
   const choices: BlockTemplate[] =
     dayType === "workday"
       ? [
@@ -86,7 +92,10 @@ function optionalBlock(dayType: "workday" | "weekend", seed: string): BlockTempl
           template("城市散步", "exploration", 810, 1050, "optional", 0.75, 0.65),
           template("见朋友", "social", 810, 1050, "optional", 0.6, 0.45),
         ];
-  return seededChoice(choices, seed) ?? choices[0]!;
+  const allowed = dayType === "weekend" && weekendMode
+    ? choices.filter((choice) => weekendMode === "outing" ? choice.location === "optional" : choice.location === "home")
+    : choices;
+  return seededChoice(allowed, seed) ?? allowed[0]!;
 }
 
 function template(
@@ -119,8 +128,8 @@ function workdayTemplates(seed: string): BlockTemplate[] {
   ];
 }
 
-function weekendTemplates(seed: string): BlockTemplate[] {
-  const afternoon = optionalBlock("weekend", seed);
+function weekendTemplates(seed: string, weekendMode?: "outing" | "flexible"): BlockTemplate[] {
+  const afternoon = optionalBlock("weekend", seed, weekendMode);
   const goingOut = afternoon.location === "optional";
   return [
     template("睡觉", "sleep", 0, 570, "home", 0.15, 0.05, "routine"),
@@ -142,8 +151,11 @@ export function buildDailySchedule(input: DailyScheduleInput): ScheduleBlock[] {
   const day = getLocalDay(input.date);
   const seed = input.seed ?? createWorldSeed(input.companionId, day.key, "daily-plan-v1");
   const correlationId = input.correlationId?.trim() || undefined;
-  const isWeekend = isWeekendLocalDate(day.key);
-  const templates = isWeekend ? weekendTemplates(seed) : workdayTemplates(seed);
+  // Official make-up workdays and holidays override the weekday. Callers that
+  // already resolved the Chinese work calendar must not silently fall back to
+  // Saturday/Sunday semantics here.
+  const isRestday = input.dayType ? input.dayType === "restday" : isWeekendLocalDate(day.key);
+  const templates = isRestday ? weekendTemplates(seed, input.weekendMode) : workdayTemplates(seed);
 
   const schedule: ScheduleBlock[] = templates.map((block, index) => ({
     id: `${input.companionId}:${day.key}:${index}`,

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
+import { INITIAL_STATE } from "@/seed/character";
 import { zonedDateKey, zonedMinutes } from "@/lib/time";
 import { activeIntervalAt } from "@/platform/time";
-import { applyEventConsequences, generateOrdinaryWorldEvent } from "@/world/events";
+import { applyWorldEventToCompanionState, reduceCompanionStateForTime } from "@/psyche/stateReducer";
 import { buildDailySchedule } from "@/world/planner";
-import { createWorldSeed, deterministicUuid } from "@/world/random";
+import { createSeededRandom, createWorldSeed, deterministicUuid } from "@/world/random";
 import { reduceWorldTick } from "@/world/reducer";
 import { scoreShareCandidate } from "@/world/share";
 import { buildThoughtAndShareCandidate } from "@/world/thoughts";
@@ -25,82 +26,89 @@ export interface WorldSimulationMetrics {
 }
 
 const TICK_MS = 15 * 60_000;
-const AFFECTS = ["energy", "boredom", "loneliness", "shareDesire"] as const;
 
-function initialState(at: Date): WorldState {
+function runtimeState(at: Date): WorldState {
   return {
     companionId: "simulation-mira",
     currentTime: at,
     currentLocationId: "home",
-    energy: 0.55,
-    boredom: 0.18,
-    curiosity: 0.7,
-    loneliness: 0.12,
-    irritation: 0,
-    disappointment: 0,
-    attachment: 0.3,
-    shareDesire: 0.45,
     lastWorldTickAt: at,
     version: 0,
   };
 }
 
-function weatherScenario(
-  dayIndex: number,
-  at: Date,
-  active: ScheduleBlock | undefined,
-  seed: string,
-): WorldEvent | null {
-  if (dayIndex !== 4 || zonedMinutes(at) !== 19 * 60 + 30 || !active?.locationId) return null;
-  const idempotencyKey = createWorldSeed(seed, "weather-plan-change");
+function eventSlots(seed: string, localDate: string) {
+  const random = createSeededRandom(createWorldSeed(seed, localDate, "daily-event-count"));
+  const slots = [510, 660, 780, 960, 1140, 1290];
+  if (random() < 0.72) slots.push(600);
+  if (random() < 0.48) slots.push(1230);
+  return slots.sort((a, b) => a - b);
+}
+
+function simulatedEvent(input: {
+  seed: string;
+  localDate: string;
+  minute: number;
+  index: number;
+  at: Date;
+  active?: ScheduleBlock;
+}): WorldEvent {
+  const idempotencyKey = createWorldSeed(input.seed, input.localDate, String(input.index), "planned-event");
+  const major = input.index < 2;
+  const social = input.index === 1 || input.index === 4;
   return {
     id: deterministicUuid(idempotencyKey),
     companionId: "simulation-mira",
     realityLayer: "physical",
     idempotencyKey,
     correlationId: deterministicUuid(`${idempotencyKey}:correlation`),
-    characterIds: [],
-    type: "weather",
-    title: "降雨改变了晚间安排",
-    description: "原定的室外活动因持续降雨改成了附近室内活动。",
-    occurredAt: at,
-    locationId: active.locationId,
-    causeType: "external_information",
-    causeId: "simulation:open-meteo:rain",
-    emotionalImpact: { disappointment: 0.08, curiosity: 0.06, shareDesire: 0.1 },
-    consequences: ["重新选择一个可达的室内地点"],
-    importance: 0.75,
-    sharePotential: 0.8,
-    randomSeed: seed,
+    characterIds: social ? [input.index === 1 ? "lin_xia" : "tang_rui"] : [],
+    type: input.active?.type === "work" ? "work" : social ? "social" : "routine",
+    title: major ? `推进今天的重要事件 ${input.index + 1}` : `生活切片 ${input.index + 1}`,
+    description: major ? "这件事改变了后续判断，并留下一个需要继续处理的问题。" : "一件具体的小事让这一天不只是时间表。",
+    occurredAt: input.at,
+    locationId: input.active?.locationId,
+    causeType: social ? "character_interaction" : "schedule",
+    emotionalImpact: major
+      ? { valence: 0.05, curiosity: 0.04, shareDesire: 0.12 }
+      : { valence: 0.01, boredom: -0.02 },
+    consequences: [major ? "后续计划因此调整" : "留下一个具体生活印象"],
+    importance: major ? 0.75 : 0.3,
+    sharePotential: major ? 0.75 : input.index < 4 ? 0.4 : 0.2,
+    randomSeed: input.seed,
   };
 }
 
 export function simulateWorld(input: { days?: number; seed?: string } = {}): WorldSimulationMetrics {
-  const days = Math.max(7, Math.min(14, input.days ?? 14));
-  const seed = input.seed ?? "mira-world-regression-v1";
-  const startedAt = new Date("2026-07-05T16:00:00.000Z"); // Beijing Monday midnight.
+  const days = Math.max(7, Math.min(30, input.days ?? 30));
+  const seed = input.seed ?? "mira-world-v3-regression";
+  const startedAt = new Date("2026-07-05T16:00:00.000Z");
   const endAt = new Date(startedAt.getTime() + days * 24 * 60 * 60_000);
-  let state = initialState(startedAt);
+  let world = runtimeState(startedAt);
+  let psyche = structuredClone(INITIAL_STATE);
   const schedules = new Map<string, ScheduleBlock[]>();
   const events: WorldEvent[] = [];
-  const ordinaryEventsPerDay: Record<string, number> = {};
-  const affectRange = Object.fromEntries(
-    AFFECTS.map((affect) => [affect, { min: state[affect], max: state[affect] }]),
-  ) as WorldSimulationMetrics["affectRange"];
+  const eventsPerDay: Record<string, number> = {};
+  const affectRange: WorldSimulationMetrics["affectRange"] = {
+    energy: { min: psyche.mood.energy, max: psyche.mood.energy },
+    boredom: { min: psyche.mood.boredom, max: psyche.mood.boredom },
+    loneliness: { min: psyche.mood.loneliness, max: psyche.mood.loneliness },
+    shareDesire: { min: psyche.drives.shareDesire, max: psyche.drives.shareDesire },
+  };
   let scheduleConsistencyFailures = 0;
   let shareCandidateCount = 0;
   let eligibleShareCandidateCount = 0;
   let maxShareScore = 0;
   let ticks = 0;
 
-  while (state.lastWorldTickAt < endAt) {
-    const windowStart = state.lastWorldTickAt;
+  while (world.lastWorldTickAt < endAt) {
+    const windowStart = world.lastWorldTickAt;
     const windowEnd = new Date(windowStart.getTime() + TICK_MS);
     const localDate = zonedDateKey(windowStart);
     let schedule = schedules.get(localDate);
     if (!schedule) {
       schedule = buildDailySchedule({
-        companionId: state.companionId,
+        companionId: world.companionId,
         date: windowStart,
         homeLocationId: "home",
         workLocationId: "work",
@@ -109,43 +117,35 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
       });
       schedules.set(localDate, schedule);
     }
-    const reduced = reduceWorldTick({ state, schedule, windowStart, windowEnd });
-    state = reduced.state;
+    const reduced = reduceWorldTick({ state: world, schedule, windowStart, windowEnd });
+    world = reduced.state;
     schedules.set(localDate, reduced.schedule);
     const active = activeIntervalAt(reduced.schedule, windowEnd);
-    if ((active?.id ?? undefined) !== state.currentScheduleBlockId) {
-      scheduleConsistencyFailures += 1;
-    }
+    if ((active?.id ?? undefined) !== world.currentScheduleBlockId) scheduleConsistencyFailures += 1;
+    psyche = reduceCompanionStateForTime({
+      state: psyche,
+      active,
+      hours: 0.25,
+      occurredAt: windowEnd,
+      correlationId: deterministicUuid(`${seed}:${windowStart.toISOString()}`),
+    }).state;
 
-    const dayIndex = Math.floor((windowEnd.getTime() - startedAt.getTime()) / (24 * 60 * 60_000));
-    const eventSeed = createWorldSeed(seed, windowStart.toISOString(), "ordinary");
-    const ordinary = active?.locationId
-      ? generateOrdinaryWorldEvent({
-          companionId: state.companionId,
-          occurredAt: windowEnd,
-          locationId: active.locationId,
-          scheduleType: active.type,
-          correlationId: deterministicUuid(`${eventSeed}:correlation`),
-          seed: eventSeed,
-          existingEvents: events,
-        })
-      : null;
-    const event = ordinary ?? weatherScenario(dayIndex, windowEnd, active, seed);
-    if (event) {
+    const minute = zonedMinutes(windowEnd);
+    const slots = eventSlots(seed, localDate);
+    const index = slots.indexOf(minute);
+    if (index >= 0) {
+      const event = simulatedEvent({ seed, localDate, minute, index, at: windowEnd, active });
       events.push(event);
-      state = applyEventConsequences(state, event).state;
-      if (event.idempotencyKey.startsWith("ordinary:")) {
-        const eventDate = zonedDateKey(event.occurredAt);
-        ordinaryEventsPerDay[eventDate] = (ordinaryEventsPerDay[eventDate] ?? 0) + 1;
-      }
-      const bundle = buildThoughtAndShareCandidate(event);
-      if (bundle) {
+      eventsPerDay[localDate] = (eventsPerDay[localDate] ?? 0) + 1;
+      psyche = applyWorldEventToCompanionState(psyche, event).state;
+      const bundle = buildThoughtAndShareCandidate(event, `我对“${event.title}”形成了一个不依赖用户话题的具体判断。`);
+      if (bundle?.candidate) {
         shareCandidateCount += 1;
         const evaluation = scoreShareCandidate(bundle.candidate, {
-          currentShareDesire: state.shareDesire,
+          currentShareDesire: psyche.drives.shareDesire,
           eventImportance: bundle.candidate.eventImportance,
-          relationshipTrust: 0.35,
-          miraIrritation: state.irritation,
+          relationshipTrust: 0.5,
+          miraIrritation: psyche.mood.irritation,
           quietHours: false,
           userLikelyBusy: false,
           hasUnansweredProactive: false,
@@ -156,15 +156,20 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
         if (evaluation.shouldShare) eligibleShareCandidateCount += 1;
       }
     }
-    for (const affect of AFFECTS) {
-      affectRange[affect].min = Math.min(affectRange[affect].min, state[affect]);
-      affectRange[affect].max = Math.max(affectRange[affect].max, state[affect]);
+    for (const [key, value] of [
+      ["energy", psyche.mood.energy],
+      ["boredom", psyche.mood.boredom],
+      ["loneliness", psyche.mood.loneliness],
+      ["shareDesire", psyche.drives.shareDesire],
+    ] as const) {
+      affectRange[key].min = Math.min(affectRange[key].min, value);
+      affectRange[key].max = Math.max(affectRange[key].max, value);
     }
     ticks += 1;
   }
 
   const trace = {
-    finalState: AFFECTS.map((affect) => [affect, state[affect]]),
+    finalState: { mood: psyche.mood, drives: psyche.drives },
     eventIds: events.map((event) => event.id),
     scheduleIds: [...schedules.values()].flatMap((schedule) => schedule.map((block) => block.id)),
   };
@@ -174,8 +179,8 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
     scheduleDays: schedules.size,
     scheduleConsistencyFailures,
     eventCount: events.length,
-    ordinaryEventsPerDay,
-    ordinaryDensityViolations: Object.values(ordinaryEventsPerDay).filter((count) => count > 2).length,
+    ordinaryEventsPerDay: eventsPerDay,
+    ordinaryDensityViolations: Object.values(eventsPerDay).filter((count) => count < 6 || count > 8).length,
     shareCandidateCount,
     eligibleShareCandidateCount,
     maxShareScore,
@@ -183,4 +188,3 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
     replayDigest: createHash("sha256").update(JSON.stringify(trace)).digest("hex"),
   };
 }
-

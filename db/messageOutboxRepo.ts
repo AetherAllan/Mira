@@ -63,7 +63,6 @@ export interface EnqueueAssistantInput {
   memoryConfidence?: number;
   stateMutation?: StateMutationInput;
   toolCall?: ToolCallWrite | null;
-  selectedSeedId?: string | null;
   proactiveLogId?: string | null;
   awaitingReply?: {
     expectation: number;
@@ -80,13 +79,7 @@ export interface EnqueueAssistantInput {
 class StateConflictError extends Error {}
 
 function stateMatches(expected: CompanionState) {
-  return and(
-    sql`${companionStates.traitsJson} = ${JSON.stringify(expected.traits)}::jsonb`,
-    sql`${companionStates.moodJson} = ${JSON.stringify(expected.mood)}::jsonb`,
-    sql`${companionStates.drivesJson} = ${JSON.stringify(expected.drives)}::jsonb`,
-    sql`${companionStates.relationshipJson} = ${JSON.stringify(expected.relationship)}::jsonb`,
-    sql`${companionStates.activeArcsJson} = ${JSON.stringify(expected.activeArcs)}::jsonb`,
-  );
+  return eq(companionStates.version, expected.version);
 }
 
 async function findExistingReply(replyToMessageId: string) {
@@ -136,6 +129,8 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
             drivesJson: input.stateMutation.next.drives,
             relationshipJson: input.stateMutation.next.relationship,
             activeArcsJson: input.stateMutation.next.activeArcs,
+            stateReasonsJson: input.stateMutation.next.stateReasons,
+            version: input.stateMutation.next.version,
             updatedAt: new Date(),
           })
           .where(
@@ -254,14 +249,6 @@ export async function enqueueAssistantMessage(input: EnqueueAssistantInput) {
             ...input.toolCall,
           },
         });
-      }
-
-      if (input.selectedSeedId) {
-        await tx.execute(sql`
-          UPDATE event_seeds
-          SET used_count = used_count + 1, last_used_at = NOW()
-          WHERE id = ${input.selectedSeedId}::uuid
-        `);
       }
 
       if (input.stateMutation?.changes.length) {

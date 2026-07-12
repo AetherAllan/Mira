@@ -16,7 +16,7 @@ export function assessDrives(state: CompanionState, analysis?: MessageAnalysis |
   const reasons = [`${dominant} is the strongest current drive`];
   let pressure = basePressure;
   if (analysis?.emotion === "distressed" || analysis?.intent === "safety_crisis") {
-    pressure = Math.max(pressure, state.drives.concern);
+    pressure = Math.max(pressure, state.mood.concern);
     reasons.push("user emotion increased concern pressure");
   }
   if (analysis?.novelty && analysis.novelty > 0.65) reasons.push("message has high novelty");

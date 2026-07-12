@@ -14,14 +14,6 @@ function initialState(at: Date): WorldState {
     companionId: "mira",
     currentTime: at,
     currentLocationId: "home",
-    energy: 0.5,
-    boredom: 0.2,
-    curiosity: 0.7,
-    loneliness: 0.3,
-    irritation: 0.4,
-    disappointment: 0.25,
-    attachment: 0.5,
-    shareDesire: 0.6,
     lastWorldTickAt: at,
     version: 4,
   };
@@ -39,7 +31,7 @@ test("completed tick window never includes the still-open window", () => {
   assert.equal(window.windowEnd.toISOString(), "2026-07-10T02:00:00.000Z");
 });
 
-test("world tick advances schedule and applies reasoned natural decay", () => {
+test("world tick advances only runtime position and schedule", () => {
   const windowStart = new Date("2026-07-10T01:45:00.000Z"); // 09:45 Beijing.
   const windowEnd = new Date("2026-07-10T02:00:00.000Z");
   const schedule = buildDailySchedule({
@@ -54,35 +46,9 @@ test("world tick advances schedule and applies reasoned natural decay", () => {
   assert.equal(result.state.currentTime.toISOString(), windowEnd.toISOString());
   assert.equal(result.state.currentLocationId, "studio");
   assert.equal(result.state.version, 5);
-  assert.ok(result.state.energy < 0.5);
-  assert.ok(result.state.irritation < 0.4);
-  assert.ok(result.state.disappointment < 0.25);
   assert.equal(result.schedule.find((block) => block.title === "上午工作")?.status, "active");
   assert.equal(result.schedule.find((block) => block.title === "通勤去工作室")?.status, "completed");
   assert.ok(result.stateChanges.every((change) => change.reason.length > 0));
-});
-
-test("loneliness does not drift toward zero while Mira is alone", () => {
-  const windowStart = new Date("2026-07-10T11:00:00.000Z"); // 19:00 Beijing.
-  const windowEnd = new Date("2026-07-10T11:15:00.000Z");
-  const schedule = buildDailySchedule({
-    companionId: "mira",
-    date: windowStart,
-    homeLocationId: "home",
-    workLocationId: "studio",
-    seed: "alone-loneliness-fixture",
-  });
-  const result = reduceWorldTick({
-    state: { ...initialState(windowStart), loneliness: 0.05 },
-    schedule,
-    windowStart,
-    windowEnd,
-  });
-  assert.ok(result.state.loneliness > 0.05);
-  assert.match(
-    result.stateChanges.find((change) => change.targetPath === "loneliness")?.reason ?? "",
-    /natural decay/,
-  );
 });
 
 test("world tick is deterministic for the same persisted input", () => {
@@ -160,7 +126,7 @@ test("offline reduction crosses Beijing midnight with detailed windows", () => {
   assert.equal(result.state.currentLocationId, "home");
 });
 
-test("gaps longer than seven days only perform aggregate decay", () => {
+test("gaps longer than seven days only advance runtime state", () => {
   const start = new Date("2026-07-01T00:00:00.000Z");
   const result = reduceOfflineGap({
     state: initialState(start),
@@ -172,6 +138,5 @@ test("gaps longer than seven days only perform aggregate decay", () => {
   assert.equal(result.eventGenerationAllowed, false);
   assert.equal(result.processedWindows, 0);
   assert.deepEqual(result.eventWindowStarts, []);
-  assert.ok(result.state.irritation < 0.4);
   assert.equal(result.state.version, 5);
 });

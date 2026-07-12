@@ -2,47 +2,33 @@ import {
   claimWorldTickRun,
   commitWorldTick,
   ensurePersistentWorld,
-  ensureScheduleBlocks,
   failWorldTickRun,
   getWorldState,
   listScheduleBlocksForDate,
-  listRecentPhysicalWorldEvents,
   listWorldCompanions,
   worldStateRowToDomain,
 } from "@/db/worldRepo";
 import { processAwaitingReplyTimeouts } from "@/db/awaitingReplyRepo";
+import { getCompanionState } from "@/db/repo";
 import { applyWeatherScheduleAdjustment } from "@/db/weatherRepo";
 import { ingestBeijingExternalInformation } from "@/world/providers/service";
 import { zonedDateKey } from "@/lib/time";
 import { DEFAULT_CHARACTER_PROFILE } from "@/seed/world";
-import {
-  applyEventConsequences,
-  generateOrdinaryWorldEvent,
-  validatePhysicalWorldEvent,
-} from "@/world/events";
-import { evaluateTripFeasibility } from "@/world/feasibility";
-import { placeDistanceMeters } from "@/world/places";
-import { buildDailySchedule } from "@/world/planner";
-import {
-  createSeededRandom,
-  createWorldSeed,
-  deterministicUuid,
-  seededChoice,
-} from "@/world/random";
+import { createWorldSeed, deterministicUuid } from "@/world/random";
 import {
   getCompletedTickWindow,
   reduceOfflineGap,
   reduceWorldTick,
 } from "@/world/reducer";
 import type { CharacterProfile } from "@/core/types";
-import type {
-  KnownPlaceRow,
-  WorldCharacterRow,
-  WorldStateRow,
-} from "@/db/schema";
-import type { ScheduleBlock, WorldEvent } from "@/world/types";
+import type { KnownPlaceRow, WorldStateRow } from "@/db/schema";
+import type { PlannedWorldEvent, ScheduleBlock, WorldEvent } from "@/world/types";
 import { activeIntervalAt } from "@/platform/time";
-import { optionalPlaceOriginRole } from "@/world/placeOrigin";
+import { generateDailyLifePlan, selectPlannedEventForTick } from "@/world/dailyPlan";
+import {
+  applyWorldEventToCompanionState,
+  reduceCompanionStateForTime,
+} from "@/psyche/stateReducer";
 
 const ENGINE_VERSION = "world-v1";
 const TICK_MS = 15 * 60_000;
@@ -68,21 +54,6 @@ function profileOrDefault(value: CharacterProfile | undefined) {
   return value ?? DEFAULT_CHARACTER_PROFILE;
 }
 
-function selectOptionalPlace(places: KnownPlaceRow[], companionId: string, localDate: string) {
-  const originRole = optionalPlaceOriginRole(localDate);
-  const origin = places.find(
-    (place) => place.metadataJson.placeRole === originRole,
-  );
-  const candidates = places.filter(
-    (place) =>
-      place.status === "want_to_visit" &&
-      place.canonicalKey !== DEFAULT_CHARACTER_PROFILE.homePlaceKey &&
-      place.canonicalKey !== DEFAULT_CHARACTER_PROFILE.workPlaceKey &&
-      (estimatedTravelMinutes(origin, place) ?? Number.POSITIVE_INFINITY) <= 60,
-  );
-  return seededChoice(candidates, createWorldSeed(companionId, localDate, "optional-place-v1"));
-}
-
 async function scheduleForDate(input: {
   companionId: string;
   profile: CharacterProfile;
@@ -96,114 +67,41 @@ async function scheduleForDate(input: {
   const existing = await listScheduleBlocksForDate(input.companionId, localDate);
   if (existing.length > 0) return { schedule: existing, created: false };
 
-  const optional = selectOptionalPlace(input.places, input.companionId, localDate);
-  const planned = buildDailySchedule({
-    companionId: input.companionId,
-    date: input.at,
-    homeLocationId: input.homePlaceId,
-    workLocationId: input.workPlaceId,
-    optionalLocationId: optional?.id,
-    seed: createWorldSeed(input.companionId, localDate, ENGINE_VERSION, "daily-plan"),
-    correlationId: input.correlationId,
-  });
+  await generateDailyLifePlan(input.companionId, localDate);
   return {
-    schedule: await ensureScheduleBlocks(input.companionId, planned, input.correlationId),
+    schedule: await listScheduleBlocksForDate(input.companionId, localDate),
     created: true,
   };
 }
 
 const activeBlockAt = activeIntervalAt<ScheduleBlock>;
 
-function estimatedTravelMinutes(first: KnownPlaceRow | undefined, second: KnownPlaceRow | undefined) {
-  if (!first || !second) return undefined;
-  if (first.id === second.id) return 0;
-  const distance = placeDistanceMeters(
-    { latitude: first.latitude ?? undefined, longitude: first.longitude ?? undefined },
-    { latitude: second.latitude ?? undefined, longitude: second.longitude ?? undefined },
-  );
-  return distance === undefined ? undefined : Math.ceil(10 + distance / 350);
-}
-
-async function ordinaryEventForTick(input: {
-  companionId: string;
-  correlationId: string;
-  randomSeed: string;
-  occurredAt: Date;
-  schedule: ScheduleBlock[];
-  places: KnownPlaceRow[];
-  characters: WorldCharacterRow[];
-}): Promise<WorldEvent | null> {
-  const active = activeBlockAt(input.schedule, input.occurredAt);
-  if (!active?.locationId || active.type === "sleep" || active.type === "commute") return null;
-  const place = input.places.find((candidate) => candidate.id === active.locationId);
-  if (!place) return null;
-
-  const existingEvents = await listRecentPhysicalWorldEvents(
-    input.companionId,
-    new Date(input.occurredAt.getTime() - 36 * 60 * 60_000),
-  );
-  let event = generateOrdinaryWorldEvent({
-    companionId: input.companionId,
-    occurredAt: input.occurredAt,
-    locationId: active.locationId,
-    scheduleType: active.type,
-    correlationId: input.correlationId,
-    seed: createWorldSeed(input.randomSeed, "ordinary-event"),
-    existingEvents,
-  });
-  if (!event) return null;
-
-  if (active.type === "work" && createSeededRandom(`${input.randomSeed}:character`)() < 0.35) {
-    const coworker = seededChoice(
-      input.characters.filter((character) => character.relationshipType === "coworker"),
-      createWorldSeed(input.randomSeed, "coworker"),
-    );
-    if (coworker) {
-      event = {
-        ...event,
-        causeType: "character_interaction",
-        causeId: `character:${coworker.id}:${event.causeId ?? "ordinary"}`,
-        characterIds: [coworker.id],
-      };
-    }
-  }
-
-  const privateRoutinePlace =
-    place.metadataJson.placeRole === "home" || place.metadataJson.placeRole === "work";
-  const remainingMinutes = Math.max(
-    0,
-    (active.endAt.getTime() - input.occurredAt.getTime()) / 60_000,
-  );
-  const feasibility = evaluateTripFeasibility({
-    currentLocationId: active.locationId,
-    destinationLocationId: active.locationId,
-    currentTime: input.occurredAt,
-    visitStartAt: input.occurredAt,
-    travelMinutes: 0,
-    estimatedCost: 0,
-    maximumCost: 120,
-    availableWindowMinutes: remainingMinutes,
-    minimumVisitMinutes: 0,
-    openingStatus: privateRoutinePlace ? "open" : "unknown",
-    weatherRisk: 0,
-    reservationRequired: false,
-    scheduleAllows: true,
-  });
-  const previous = existingEvents[0];
-  const previousPlace = previous?.locationId
-    ? input.places.find((candidate) => candidate.id === previous.locationId)
-    : undefined;
-  const validation = validatePhysicalWorldEvent({
-    authority: "world_engine",
-    event,
-    destinationLocationId: active.locationId,
-    feasibility,
-    scheduleBlock: active,
-    knownPlaceIds: input.places.map((candidate) => candidate.id),
-    previousPhysicalEvent: previous,
-    travelMinutesFromPrevious: estimatedTravelMinutes(previousPlace, place),
-  });
-  return validation.valid ? event : null;
+function materializePlannedEvent(
+  planned: PlannedWorldEvent,
+  occurredAt: Date,
+  correlationId: string,
+): WorldEvent {
+  const key = `planned-event:${planned.idempotencyKey}`;
+  return {
+    id: deterministicUuid(key),
+    companionId: planned.companionId,
+    realityLayer: "physical",
+    idempotencyKey: key,
+    correlationId,
+    characterIds: planned.characterIds,
+    type: planned.eventType,
+    title: planned.title,
+    description: planned.description,
+    occurredAt,
+    locationId: planned.locationId,
+    causeType: planned.characterIds.length ? "character_interaction" : "schedule",
+    causeId: planned.id,
+    emotionalImpact: planned.emotionalImpact,
+    consequences: planned.consequences,
+    importance: planned.importance,
+    sharePotential: planned.sharePotential,
+    randomSeed: planned.idempotencyKey,
+  };
 }
 
 async function runAggregateCatchUp(input: {
@@ -252,11 +150,22 @@ async function runAggregateCatchUp(input: {
     reduced.state.currentActivityId = active?.id;
     reduced.state.currentScheduleBlockId = active?.id;
     if (created) reduced.state.lastDailyPlanAt = input.completedEnd;
+    const expectedCompanionState = await getCompanionState(input.stateRow.companionId);
+    const psychology = reduceCompanionStateForTime({
+      state: expectedCompanionState,
+      active,
+      hours: Math.max(0, (input.completedEnd.getTime() - input.stateRow.lastWorldTickAt.getTime()) / 3_600_000),
+      occurredAt: input.completedEnd,
+      correlationId: claim.correlationId,
+    });
 
     await commitWorldTick({
       claim,
       expectedState: input.stateRow,
       result: reduced,
+      expectedCompanionState,
+      companionState: psychology.state,
+      companionStateChanges: psychology.changes,
       mode: "aggregate",
     });
     return "completed" as const;
@@ -358,27 +267,43 @@ async function runCompanionTick(
         windowEnd,
         correlationId: claim.correlationId,
       });
-      const worldEvent = await ordinaryEventForTick({
-        companionId: companion.id,
-        correlationId: claim.correlationId,
-        randomSeed,
+      const expectedCompanionState = await getCompanionState(companion.id);
+      const active = activeBlockAt(reduced.schedule, windowEnd);
+      const timePsychology = reduceCompanionStateForTime({
+        state: expectedCompanionState,
+        active,
+        hours: TICK_MS / 3_600_000,
         occurredAt: windowEnd,
-        schedule: reduced.schedule,
-        places: context.places,
-        characters: context.characters,
+        correlationId: claim.correlationId,
       });
+      const decision = await selectPlannedEventForTick({
+        companionId: companion.id,
+        occurredAt: windowEnd,
+        mood: timePsychology.state.mood,
+        drives: timePsychology.state.drives,
+      });
+      const worldEvent = decision?.event.status === "selected"
+        ? materializePlannedEvent(decision.event, windowEnd, claim.correlationId)
+        : null;
+      let companionState = timePsychology.state;
+      const companionStateChanges = [...timePsychology.changes];
       if (worldEvent) {
-        const consequences = applyEventConsequences(reduced.state, worldEvent);
-        reduced.state = consequences.state;
-        reduced.stateChanges.push(...consequences.stateChanges);
+        const eventPsychology = applyWorldEventToCompanionState(companionState, worldEvent);
+        companionState = eventPsychology.state;
+        companionStateChanges.push(...eventPsychology.changes);
       }
       if (created) reduced.state.lastDailyPlanAt = windowEnd;
       stateRow = await commitWorldTick({
         claim,
         expectedState: stateRow,
         result: reduced,
+        expectedCompanionState,
+        companionState,
+        companionStateChanges,
         mode: "detailed",
         worldEvent,
+        plannedEvent: decision?.event,
+        createThought: decision?.createThought,
       });
       processedWindows += 1;
     } catch (error) {

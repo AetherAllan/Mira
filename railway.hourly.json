@@ -3,7 +3,7 @@
   "build": { "builder": "RAILPACK" },
   "deploy": {
     "startCommand": "bun run cron:hourly-daily",
-    "cronSchedule": "50 * * * *",
+    "cronSchedule": "30 * * * *",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }

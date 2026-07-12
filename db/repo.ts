@@ -19,7 +19,6 @@ import type {
   MemoryKind,
   MessageRole,
   RuntimeConfig,
-  SeedCard,
 } from "@/core/types";
 import {
   computeMirrorIndex,
@@ -32,7 +31,6 @@ import {
   companions,
   companionStates,
   events,
-  eventSeeds,
   internalJournals,
   memories,
   messageAnnotations,
@@ -44,10 +42,8 @@ import {
   worldEvents,
 } from "@/db/schema";
 import { DEFAULT_RUNTIME_CONFIG, INITIAL_STATE } from "@/seed/character";
-import { DEFAULT_SEED_CARDS } from "@/seed/seedCards";
 import { isValidTimeZone } from "@/lib/time";
 import { requireFreeModel } from "@/llm/models";
-import { createSeededRandom, createWorldSeed } from "@/world/random";
 
 type NewMessage = Omit<typeof messages.$inferInsert, "id" | "createdAt">;
 type NewAnnotation = Omit<typeof messageAnnotations.$inferInsert, "id" | "createdAt">;
@@ -101,6 +97,8 @@ function stateFromRow(row: typeof companionStates.$inferSelect): CompanionState 
     drives: row.drivesJson,
     relationship: { ...INITIAL_STATE.relationship, ...row.relationshipJson },
     activeArcs: row.activeArcsJson,
+    stateReasons: row.stateReasonsJson,
+    version: row.version,
   };
 }
 
@@ -237,29 +235,24 @@ export async function ensureCompanionContext(
       drivesJson: INITIAL_STATE.drives,
       relationshipJson: INITIAL_STATE.relationship,
       activeArcsJson: INITIAL_STATE.activeArcs,
+      stateReasonsJson: INITIAL_STATE.stateReasons,
+      version: INITIAL_STATE.version,
     })
     .onConflictDoNothing({ target: companionStates.companionId });
 
-  const world = await Promise.all([
-    createEventSeeds(companion.id, DEFAULT_SEED_CARDS),
-    ensurePersistentWorld(
-      companion.id,
-      companion.configJson.character.profile ?? DEFAULT_RUNTIME_CONFIG.character.profile,
-    ),
-  ]).then(([, persistentWorld]) => persistentWorld);
+  const world = await ensurePersistentWorld(
+    companion.id,
+    companion.configJson.character.profile ?? DEFAULT_RUNTIME_CONFIG.character.profile,
+  );
 
-  const [stateRow, seeds] = await Promise.all([
-    db
-      .select()
-      .from(companionStates)
-      .where(eq(companionStates.companionId, companion.id))
-      .limit(1)
-      .then((rows) => rows[0]),
-    listSeeds(companion.id),
-  ]);
+  const [stateRow] = await db
+    .select()
+    .from(companionStates)
+    .where(eq(companionStates.companionId, companion.id))
+    .limit(1);
 
   if (!stateRow) throw new Error("Failed to create companion state");
-  return { user, companion, state: stateFromRow(stateRow), stateRow, seeds, world };
+  return { user, companion, state: stateFromRow(stateRow), stateRow, world };
 }
 
 export async function getRuntimeContext(telegramUserId?: string) {
@@ -559,67 +552,6 @@ export async function setMemoryCooldown(
   return rows[0] ?? null;
 }
 
-export async function createEventSeeds(companionId: string, seeds: SeedCard[]) {
-  if (seeds.length === 0) return [];
-  return getDb()
-    .insert(eventSeeds)
-    .values(
-      seeds.map((seed) => ({
-        companionId,
-        type: seed.type,
-        text: seed.text,
-        tagsJson: seed.tags,
-        weight: seed.weight ?? 1,
-        enabled: seed.enabled ?? true,
-      })),
-    )
-    .onConflictDoNothing({ target: [eventSeeds.companionId, eventSeeds.text] })
-    .returning();
-}
-
-export async function listSeeds(companionId: string, enabled?: boolean) {
-  return getDb()
-    .select()
-    .from(eventSeeds)
-    .where(
-      and(
-        eq(eventSeeds.companionId, companionId),
-        enabled === undefined ? undefined : eq(eventSeeds.enabled, enabled),
-      ),
-    )
-    .orderBy(desc(eventSeeds.weight), desc(eventSeeds.createdAt));
-}
-
-export function listEnabledSeeds(companionId: string) {
-  return listSeeds(companionId, true);
-}
-
-export async function markSeedUsed(id: string) {
-  const rows = await getDb()
-    .update(eventSeeds)
-    .set({
-      usedCount: sql`${eventSeeds.usedCount} + 1`,
-      lastUsedAt: new Date(),
-    })
-    .where(eq(eventSeeds.id, id))
-    .returning();
-  return rows[0] ?? null;
-}
-
-export async function setSeedEnabled(id: string, enabled: boolean, companionId?: string) {
-  const rows = await getDb()
-    .update(eventSeeds)
-    .set({ enabled })
-    .where(
-      and(
-        eq(eventSeeds.id, id),
-        companionId ? eq(eventSeeds.companionId, companionId) : undefined,
-      ),
-    )
-    .returning();
-  return rows[0] ?? null;
-}
-
 export async function countTodayToolCalls(companionId: string, timeZone = "Asia/Shanghai") {
   const { start, end } = dayBounds(undefined, timeZone);
   const rows = await getDb()
@@ -752,7 +684,6 @@ export async function applyDailyReflectionTransaction(input: {
   expectedState: CompanionState;
   state: CompanionState;
   changes: DailyReflectionChangeInput[];
-  seeds?: SeedCard[];
   userId?: string;
   eventPayload?: unknown;
 }) {
@@ -765,16 +696,6 @@ export async function applyDailyReflectionTransaction(input: {
       deltaJson: change.deltaJson ?? null,
     })),
   );
-  const seedsJson = JSON.stringify(
-    (input.seeds ?? []).map((seed) => ({
-      type: seed.type,
-      text: seed.text,
-      tags: seed.tags,
-      weight: seed.weight ?? 1,
-      enabled: seed.enabled ?? true,
-    })),
-  );
-
   // One CTE statement gives the daily reflection a single commit boundary.
   // Locking and comparing the full state prevents a separate Railway cron
   // process from overwriting an interaction that committed while the
@@ -789,6 +710,7 @@ export async function applyDailyReflectionTransaction(input: {
         AND drives_json = ${JSON.stringify(expectedState.drives)}::jsonb
         AND relationship_json = ${JSON.stringify(expectedState.relationship)}::jsonb
         AND active_arcs_json = ${JSON.stringify(expectedState.activeArcs)}::jsonb
+        AND version = ${expectedState.version}
       FOR UPDATE
     ),
     inserted_journal AS (
@@ -826,6 +748,8 @@ export async function applyDailyReflectionTransaction(input: {
         drives_json = ${JSON.stringify(state.drives)}::jsonb,
         relationship_json = ${JSON.stringify(state.relationship)}::jsonb,
         active_arcs_json = ${JSON.stringify(state.activeArcs)}::jsonb,
+        state_reasons_json = ${JSON.stringify(state.stateReasons)}::jsonb,
+        version = ${state.version},
         updated_at = NOW()
       WHERE companion_id = ${journalInput.companionId}::uuid
         AND EXISTS (SELECT 1 FROM inserted_journal)
@@ -847,22 +771,6 @@ export async function applyDailyReflectionTransaction(input: {
         ${journalInput.correlationId ?? null}::uuid
       FROM jsonb_array_elements(${changesJson}::jsonb) AS item
       WHERE EXISTS (SELECT 1 FROM inserted_journal)
-      RETURNING id
-    ),
-    inserted_seeds AS (
-      INSERT INTO event_seeds (
-        companion_id, type, text, tags_json, weight, enabled
-      )
-      SELECT
-        ${journalInput.companionId}::uuid,
-        item->>'type',
-        item->>'text',
-        item->'tags',
-        (item->>'weight')::real,
-        (item->>'enabled')::boolean
-      FROM jsonb_array_elements(${seedsJson}::jsonb) AS item
-      WHERE EXISTS (SELECT 1 FROM inserted_journal)
-      ON CONFLICT (companion_id, text) DO NOTHING
       RETURNING id
     ),
     inserted_change_events AS (
@@ -933,60 +841,6 @@ export async function applyDailyReflectionTransaction(input: {
 export async function createWorldEvent(input: NewWorldEvent) {
   const rows = await getDb().insert(worldEvents).values(input).returning();
   return rows[0];
-}
-
-export async function generateWorldEventFromSeed(companionId: string, requestedSeedId?: string) {
-  const available = await listEnabledSeeds(companionId);
-  const candidates = requestedSeedId
-    ? available.filter((seed) => seed.id === requestedSeedId)
-    : available;
-  if (candidates.length === 0) throw new Error("No enabled seed card found");
-
-  const generatedAt = new Date();
-  const randomSeed = createWorldSeed(
-    companionId,
-    requestedSeedId ?? "auto",
-    generatedAt.toISOString(),
-    "inner-world-event",
-  );
-  const totalWeight = candidates.reduce((sum, seed) => sum + Math.max(seed.weight, 0), 0);
-  let roll = createSeededRandom(randomSeed)() * (totalWeight || candidates.length);
-  let selected = candidates[0];
-  for (const seed of candidates) {
-    roll -= totalWeight ? Math.max(seed.weight, 0) : 1;
-    if (roll <= 0) {
-      selected = seed;
-      break;
-    }
-  }
-
-  const labels: Record<string, string> = {
-    inner_question: "一个没有急着回答的问题",
-    imagined_scene: "内在世界场景",
-    micro_challenge: "微型挑战",
-    opinion_seed: "今天保留的意见",
-    inner_conflict: "没有立刻解决的冲突",
-  };
-  const worldEvent = await createWorldEvent({
-    companionId,
-    seedId: selected.id,
-    title: labels[selected.type] ?? "内在世界片段",
-    content: `想象记录：${selected.text}`,
-    moodImpactJson: {},
-    arcImpactJson: {},
-    randomSeed,
-    occurredAt: generatedAt,
-  });
-  await Promise.all([
-    markSeedUsed(selected.id),
-    createEvent({
-      companionId,
-      type: "world.event",
-      source: "admin",
-      payloadJson: { worldEventId: worldEvent.id, seedId: selected.id },
-    }),
-  ]);
-  return { worldEvent, seed: selected };
 }
 
 export async function listTodayActivity(
@@ -1206,7 +1060,6 @@ export async function getAdminSettings(companionId: string) {
   return {
     companion: companionRows[0],
     config: companionRows[0].configJson,
-    seeds: await listSeeds(companionId),
   };
 }
 
@@ -1263,7 +1116,7 @@ export async function updateRuntimeConfig(companionId: string, patchValue: unkno
   }
 
   const next: RuntimeConfig = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     character: {
       name:
         typeof characterPatch.name === "string" && characterPatch.name.trim()
@@ -1366,20 +1219,14 @@ function dashboardMirrorIndex(
     messageRole: MessageRole;
     topicsJson: Array<{ name: string; confidence: number }>;
   }>,
-  logs: Array<{ selectedSeedJson: unknown }>,
+  logs: Array<{ sourceType: string | null }>,
 ) {
   const userTopics = new Set(
     annotations
       .filter((item) => item.messageRole === "user")
       .flatMap((item) => item.topicsJson.map((topic) => topic.name)),
   );
-  const proactiveTags = new Set<string>();
-  for (const log of logs) {
-    if (!isRecord(log.selectedSeedJson) || !Array.isArray(log.selectedSeedJson.tags)) continue;
-    for (const tag of log.selectedSeedJson.tags) {
-      if (typeof tag === "string") proactiveTags.add(tag);
-    }
-  }
+  const proactiveTags = new Set(logs.flatMap((log) => log.sourceType ? [log.sourceType] : []));
   return computeMirrorIndex([...userTopics], [...proactiveTags]);
 }
 
@@ -1428,7 +1275,6 @@ export async function getDashboardSnapshot() {
     annotations,
     assistantMessages,
     worldEventRows,
-    seedRows,
     proactiveRows,
     toolRows,
     memoryRows,
@@ -1445,7 +1291,6 @@ export async function getDashboardSnapshot() {
     listRecentAnnotations(companionId, 50),
     listRecentMessages(companionId, 10, "assistant"),
     listWorldEvents(companionId, 50),
-    listSeeds(companionId),
     listProactiveLogs(companionId, 100),
     listToolCalls(companionId, 100),
     listAdminMemories(companionId, { limit: 100 }),
@@ -1538,7 +1383,6 @@ export async function getDashboardSnapshot() {
     repetitionScore: computeRepetitionScore(assistantMessages),
     mirrorIndex: dashboardMirrorIndex(annotations, proactiveRows),
     worldEvents: worldEventRows,
-    seeds: seedRows.map(({ tagsJson, ...seed }) => ({ ...seed, tags: tagsJson })),
     proactiveLogs: proactiveRows,
     toolCalls: toolRows,
     memories: memoryRows,

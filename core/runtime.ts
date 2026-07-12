@@ -5,7 +5,6 @@ import type {
   CompanionState,
   MessageAnalysis,
   RuntimeConfig,
-  SeedCard,
 } from "@/core/types";
 import {
   ensureCompanionContext,
@@ -23,7 +22,6 @@ import {
   getRuntimeContext,
   getToolStats,
   listAvailableMemories,
-  listEnabledSeeds,
   listRecentAnnotations,
   listRecentMessages,
   renewMessageProcessing,
@@ -44,8 +42,10 @@ import {
 } from "@/db/awaitingReplyRepo";
 import {
   claimShareCandidate,
+  countTodayLifeShares,
   listPendingShareCandidates,
   markShareCandidateShared,
+  markPendingCandidateSharedInReply,
   releaseShareCandidate,
   updateShareCandidateScore,
 } from "@/db/shareRepo";
@@ -75,18 +75,14 @@ import {
   selectRelevantMemories,
   shouldStoreMemory,
 } from "@/psyche/memory";
-import { selectNoveltySeed } from "@/psyche/noveltyEngine";
 import { drainTelegramOutbox } from "@/messaging/outbox";
 import { scoreShareCandidate } from "@/world/share";
-import { createSeededRandom, createWorldSeed } from "@/world/random";
 import type { TelegramTextMessage } from "@/telegram/webhook";
 import { TOOL_REGISTRY, type ToolExecution } from "@/tools/registry";
 
 export { runDailyReflection } from "@/core/runtime/dailyReflection";
 
 type RuntimeContext = NonNullable<Awaited<ReturnType<typeof getRuntimeContext>>>;
-type RecentMessage = Awaited<ReturnType<typeof listRecentMessages>>[number];
-
 const SAFETY_REPLY =
   "我先认真一点：如果你现在可能伤害自己，或正处于立即危险，请立刻联系当地紧急服务，并马上联系一个你信任、能到场的人。先离开危险物品和独处环境，去有人的地方。你现在是否处于立即危险？";
 
@@ -100,42 +96,12 @@ function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function toSeed(row: {
-  id?: string;
-  type: string;
-  text: string;
-  tagsJson?: unknown;
-  tags?: unknown;
-  weight?: number;
-  enabled?: boolean;
-  usedCount?: number;
-  lastUsedAt?: Date | string | null;
-}): SeedCard {
-  const rawTags = row.tagsJson ?? row.tags;
-  return {
-    id: row.id,
-    type: row.type,
-    text: row.text,
-    tags: Array.isArray(rawTags) ? rawTags.filter((tag): tag is string => typeof tag === "string") : [],
-    weight: row.weight ?? 1,
-    enabled: row.enabled ?? true,
-    usedCount: row.usedCount ?? 0,
-    lastUsedAt: row.lastUsedAt ?? null,
-  };
-}
-
-function proactiveTags(messages: RecentMessage[]): string[] {
-  return messages.flatMap((message) => {
-    const raw = asObject(message.rawJson);
-    if (raw?.proactive !== true) return [];
-    const seed = asObject(raw.selectedSeed);
-    return Array.isArray(seed?.tags) ? seed.tags.filter((tag): tag is string => typeof tag === "string") : [];
-  });
-}
-
-function userTopicNames(annotations: Array<{ topicsJson: unknown; messageRole?: string }>): string[] {
+function topicNames(
+  annotations: Array<{ topicsJson: unknown; messageRole?: string }>,
+  role: "user" | "assistant",
+): string[] {
   return annotations.flatMap((annotation) =>
-    annotation.messageRole === "user" && Array.isArray(annotation.topicsJson)
+    annotation.messageRole === role && Array.isArray(annotation.topicsJson)
       ? annotation.topicsJson
           .map((topic) => asObject(topic)?.name)
           .filter((name): name is string => typeof name === "string")
@@ -148,19 +114,11 @@ function buildAssistantAnnotation(
     text: string;
     plan: ActionPlan;
     analysis: MessageAnalysis;
-    selectedSeed: SeedCard | null;
     proactive?: boolean;
     safety?: boolean;
   },
 ) {
-  const topics = input.proactive && input.selectedSeed
-    ? input.selectedSeed.tags.map((name) => ({ name, confidence: 0.78 }))
-    : input.selectedSeed
-      ? [
-          ...input.analysis.topics,
-          ...input.selectedSeed.tags.map((name) => ({ name, confidence: 0.62 })),
-        ]
-      : input.analysis.topics;
+  const topics = input.analysis.topics;
   const uniqueTopics = [...new Map(topics.map((topic) => [topic.name, topic])).values()].slice(0, 8);
   return {
     topics: uniqueTopics.length ? uniqueTopics : [{ name: "daily_life", confidence: 0.5 }],
@@ -171,7 +129,7 @@ function buildAssistantAnnotation(
         : "composed",
     intent: input.safety ? "safety_response" : input.plan.mode,
     importance: input.safety ? 1 : input.proactive ? 0.48 : Math.max(0.35, input.analysis.importance * 0.8),
-    novelty: input.selectedSeed ? 0.72 : Math.min(0.65, input.analysis.novelty),
+    novelty: Math.min(0.75, input.analysis.novelty),
     summary: input.text.length > 120 ? `${input.text.slice(0, 117)}...` : input.text,
     worldSignals: [],
   } satisfies MessageAnalysis;
@@ -248,8 +206,6 @@ async function persistSafetyReply(
     action: "reply",
     mode: "emotional_support",
     memoryBudget: "none",
-    noveltyBudget: "none",
-    selectedSeed: null,
     toolAllowed: false,
     styleHints: ["direct", "safety-first", "no roleplay"],
     reason: "Deterministic safety override for a crisis expression",
@@ -284,11 +240,10 @@ async function persistSafetyReply(
       text: SAFETY_REPLY,
       plan,
       analysis,
-      selectedSeed: null,
       safety: true,
     }),
     },
-    (state) => applyInteractionGrowth(state, analysis),
+    (state) => applyInteractionGrowth(state, analysis, correlationId),
   );
   if (!assistant.message) throw new Error("Failed to enqueue safety reply");
   const delivery = await drainTelegramOutbox(assistant.message.id);
@@ -436,7 +391,6 @@ async function processTelegramMessage(
     recentMessages,
     recentAnnotations,
     availableMemories,
-    seedRows,
     toolCallsToday,
     photoToolStats,
   ] =
@@ -444,7 +398,6 @@ async function processTelegramMessage(
       listRecentMessages(context.companion.id, 30),
       listRecentAnnotations(context.companion.id, 50),
       listAvailableMemories(context.companion.id, 100),
-      listEnabledSeeds(context.companion.id),
       countTodayToolCalls(context.companion.id, timeZone),
       getToolStats(context.companion.id, "generate_fake_photo", timeZone),
     ]);
@@ -452,8 +405,8 @@ async function processTelegramMessage(
   const topicEntropy = computeTopicEntropy(recentAnnotations);
   const repetitionScore = computeRepetitionScore(recentAssistant);
   const mirrorIndex = computeMirrorIndex(
-    userTopicNames(recentAnnotations),
-    proactiveTags(recentMessages),
+    topicNames(recentAnnotations, "user"),
+    topicNames(recentAnnotations, "assistant"),
   );
   const selectedMemories = selectRelevantMemories(
     availableMemories,
@@ -463,16 +416,6 @@ async function processTelegramMessage(
   if (selectedMemories.length) {
     await useMemories(selectedMemories.map((memory) => memory.id), timeZone);
   }
-  const seeds = seedRows.map(toSeed);
-  const selectedSeed = selectNoveltySeed(seeds, {
-    state: context.state,
-    analysis: analyzed.analysis,
-    mirrorIndex,
-    random: createSeededRandom(createWorldSeed(correlationId, "novelty-use"))(),
-    selectionRandom: createSeededRandom(
-      createWorldSeed(correlationId, "novelty-selection"),
-    )(),
-  });
   const driveAssessment = assessDrives(context.state, analyzed.analysis);
   await logRuntimeEvent({
     userId: context.user.id,
@@ -487,7 +430,6 @@ async function processTelegramMessage(
     state: context.state,
     analysis: analyzed.analysis,
     memories: selectedMemories,
-    selectedSeed,
     driveAssessment,
     topicEntropy,
     repetitionScore,
@@ -527,7 +469,6 @@ async function processTelegramMessage(
     state: context.state,
     plan,
     memories: selectedMemories,
-    selectedSeed,
     cooldownWarnings: [
       ...memoryCooldownWarnings(selectedMemories),
       ...(toolCallsToday >= config.policy.toolDailyLimit ? ["Daily tool limit reached; no tool call is allowed."] : []),
@@ -582,7 +523,6 @@ async function processTelegramMessage(
         groundingValidation: acted.grounding,
         webCitations: acted.citations,
         selectedMemories: selectedMemories.map((memory) => memory.id),
-        selectedSeed,
         topicEntropy,
         mirrorIndex,
         repetitionScore,
@@ -598,11 +538,9 @@ async function processTelegramMessage(
         text: acted.finalText,
         plan,
         analysis: analyzed.analysis,
-        selectedSeed,
       }),
       memoryCandidate,
       toolCall: toolCallWrite(acted.toolExecution, plan.reason),
-      selectedSeedId: selectedSeed?.id,
       awaitingReply: awaitingReplyDraft({
         text: acted.finalText,
         messageKind: "reply",
@@ -611,9 +549,25 @@ async function processTelegramMessage(
         ),
       }),
     },
-    (state) => applyInteractionGrowth(state, analyzed.analysis),
+    (state) => applyInteractionGrowth(state, analyzed.analysis, correlationId),
   );
   if (!assistant.message) throw new Error("Failed to enqueue assistant reply");
+  const reactiveCandidate = groundedContext.shareCandidate;
+  const reactiveCandidateId = typeof reactiveCandidate?.id === "string" ? reactiveCandidate.id : null;
+  const reactiveSourceId = typeof reactiveCandidate?.sourceId === "string" ? reactiveCandidate.sourceId : null;
+  const reactiveSummary = typeof reactiveCandidate?.contentSummary === "string"
+    ? reactiveCandidate.contentSummary.slice(0, 24)
+    : "";
+  const usedReactiveCandidate = Boolean(
+    reactiveCandidateId && (
+      acted.actorOutput.groundingRefs.includes(reactiveCandidateId) ||
+      (reactiveSourceId && acted.actorOutput.groundingRefs.includes(reactiveSourceId)) ||
+      (reactiveSummary.length >= 8 && acted.finalText.includes(reactiveSummary))
+    ),
+  );
+  if (usedReactiveCandidate && reactiveCandidateId) {
+    await markPendingCandidateSharedInReply(reactiveCandidateId, assistant.message.id);
+  }
   if (!assistant.created) await completeMessageProcessing(userMessage.row.id);
   const delivery = await drainTelegramOutbox(assistant.message.id);
   return {
@@ -630,7 +584,6 @@ async function writeProactiveLog(
     shouldSend: boolean;
     reason: string;
     selectedMode?: string | null;
-    selectedSeedJson?: SeedCard | null;
     sentMessageId?: string | null;
     sentText?: string | null;
     quietHoursBlocked?: boolean;
@@ -644,7 +597,6 @@ async function writeProactiveLog(
     userId: context.user.id,
     companionId: context.companion.id,
     selectedMode: null,
-    selectedSeedJson: null,
     sentMessageId: null,
     sentText: null,
     quietHoursBlocked: false,
@@ -691,13 +643,14 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     };
   }
 
-  const [stats, candidates, sharedKnowledge, recentMessages, unansweredProactive] =
+  const [stats, candidates, sharedKnowledge, recentMessages, unansweredProactive, lifeSharesToday] =
     await Promise.all([
       getProactiveStats(context.companion.id, timeZone),
       listPendingShareCandidates(context.companion.id, now),
       listActiveSharedKnowledge(context.companion.id, now, 30),
       listRecentMessages(context.companion.id, 30),
       hasWaitingProactiveReply(context.companion.id),
+      countTodayLifeShares(context.companion.id, timeZone),
     ]);
   const userLikelyBusy = sharedKnowledge.some(
     (item) => item.subject === "用户当前可能忙碌",
@@ -706,15 +659,19 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     .map((candidate) => ({
       candidate,
       evaluation: scoreShareCandidate(candidate, {
-        currentShareDesire: context.world.state.shareDesire,
+        currentShareDesire: context.state.drives.shareDesire,
         eventImportance: candidate.eventImportance,
         relationshipTrust: context.state.relationship.trust,
-        miraIrritation: context.world.state.irritation,
+        miraIrritation: context.state.mood.irritation,
         quietHours: isQuietHours(now, config.policy.quietHours),
         userLikelyBusy,
         hasUnansweredProactive: unansweredProactive,
-        dailySentCount: stats.sentToday,
-        dailyLimit: config.policy.proactiveMaxPerDay,
+        dailySentCount: ["inner_thought", "world_event", "open_loop"].includes(candidate.sourceType)
+          ? lifeSharesToday
+          : stats.sentToday,
+        dailyLimit: ["inner_thought", "world_event", "open_loop"].includes(candidate.sourceType)
+          ? 2
+          : config.policy.proactiveMaxPerDay,
         hoursSinceLastProactive: hoursSince(stats.lastSentAt, now),
         minimumIntervalHours: config.policy.minimumProactiveIntervalHours,
       }),
@@ -758,12 +715,6 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
   const claimed = await claimShareCandidate(selected.candidate.id, selected.evaluation.score, now);
   if (!claimed) return { sent: false, reason: "candidate_claimed_elsewhere" };
   const candidate = selected.candidate;
-  const selectedSeed: SeedCard = {
-    id: candidate.id,
-    type: "share_candidate",
-    text: candidate.contentSummary,
-    tags: [candidate.sourceType],
-  };
   const analysis: MessageAnalysis = {
     topics: [{ name: candidate.sourceType, confidence: 0.9 }],
     emotion: candidate.emotionalIntensity >= 0.6 ? "emotionally_engaged" : "reflective",
@@ -777,8 +728,6 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     action: "proactive_message",
     mode: "quiet_observation",
     memoryBudget: "light",
-    noveltyBudget: "none",
-    selectedSeed,
     toolAllowed: false,
     webAccess: "none",
     styleHints: ["short", "specific", "grounded in the selected persisted event"],
@@ -803,7 +752,6 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     shouldSend: true,
     reason: `Reserved persisted candidate ${candidate.id}`,
     selectedMode: plan.mode,
-    selectedSeedJson: selectedSeed,
     idempotencyKey,
     score: selected.evaluation.score,
   });
@@ -822,7 +770,6 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
     state: context.state,
     plan,
     memories: selectedMemories,
-    selectedSeed,
     cooldownWarnings: ["Only describe facts contained in the selected persisted candidate."],
     analysis,
     userMessage: null,
@@ -880,7 +827,6 @@ async function runCandidateHourlyProactiveOnce(now: Date): Promise<ProactiveRunR
           text: acted.finalText,
           plan,
           analysis,
-          selectedSeed,
           proactive: true,
         }),
         memoryCandidate: null,

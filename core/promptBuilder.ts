@@ -4,7 +4,6 @@ import type {
   CompanionState,
   MessageAnalysis,
   RuntimeConfig,
-  SeedCard,
   SelectedMemory,
 } from "@/core/types";
 import type { LlmUsageContext } from "@/db/usageRepo";
@@ -40,6 +39,7 @@ export interface ActorGroundedContext {
     changeReason: string | null;
   }>;
   emotionReasons: Record<string, unknown>;
+  dailyPlan?: Record<string, unknown> | null;
   workingMemory: Record<string, unknown> | null;
   openLoops: Array<Record<string, unknown>>;
   worldEvents: Array<Record<string, unknown>>;
@@ -54,7 +54,6 @@ export interface ActorPromptInput {
   state: CompanionState;
   plan: ActionPlan;
   memories: SelectedMemory[];
-  selectedSeed: SeedCard | null;
   cooldownWarnings: string[];
   analysis?: MessageAnalysis | null;
   userMessage?: string | null;
@@ -119,25 +118,27 @@ function render(input: ActorPromptInput, context: ActorGroundedContext | null) {
     JSON.stringify(
       context?.schedule.map(({ id, startAtUtc, endAtUtc }) => ({ id, startAtUtc, endAtUtc })) ?? [],
     ),
-    "5. Current emotion and concrete reasons:",
-    JSON.stringify({ mood: input.state.mood, reasons: context?.emotionReasons ?? {} }),
-    "6. Relationship summary:",
-    JSON.stringify(input.state.relationship),
-    "7. Conversation working memory:",
-    JSON.stringify(context?.workingMemory ?? null),
-    "8. Relevant open loops:",
+    "5. Today's own-life plan and event progress:",
+    JSON.stringify(context?.dailyPlan ?? null),
+    "6. Current emotion, drives and concrete reasons:",
+    JSON.stringify({ mood: input.state.mood, drives: input.state.drives, reasons: context?.emotionReasons ?? {} }),
+    "7. Pending share candidate:",
+    JSON.stringify(context?.shareCandidate ?? null),
+    "8. Mira/shared open loops:",
     JSON.stringify(context?.openLoops ?? []),
-    "9. Relevant long-term memories:",
+    "9. Relevant long-term memories (self/world first):",
     JSON.stringify(input.memories),
     "10. Recent world events (physical and inner remain separate):",
     JSON.stringify(context?.worldEvents ?? []),
-    "11. Relevant places, news and activity facts:",
+    "11. Relationship summary:",
+    JSON.stringify(input.state.relationship),
+    "12. Conversation working memory:",
+    JSON.stringify(context?.workingMemory ?? null),
+    "13. Relevant places, news and activity facts:",
     JSON.stringify(context?.externalInformation ?? []),
-    "12. Pending share candidate:",
-    JSON.stringify(context?.shareCandidate ?? input.selectedSeed),
-    "13. Recent conversation (oldest to newest; current user message excluded):",
+    "14. Recent conversation (oldest to newest; current user message excluded):",
     JSON.stringify(context?.recentMessages ?? legacyRecent),
-    "14. Current user message (appears exactly once):",
+    "15. Current user message (appears exactly once):",
     JSON.stringify(input.userMessage ?? null),
     `Traits: ${JSON.stringify(input.state.traits)}`,
     `Drives: ${JSON.stringify(input.state.drives)}`,
@@ -157,7 +158,7 @@ function render(input: ActorPromptInput, context: ActorGroundedContext | null) {
 
 export function buildBudgetedActorPrompt(
   input: ActorPromptInput,
-  tokenBudget = 6_000,
+  tokenBudget = 8_000,
 ): BudgetedActorPrompt {
   const context = input.groundedContext
     ? {
@@ -170,12 +171,12 @@ export function buildBudgetedActorPrompt(
     : null;
   let prompt = render(input, context);
 
-  // Keep identity, current world state and current message. Old external facts,
-  // old events and old chat are the first things to leave the budget.
+  // Mira's own day is the stable context. Conversation history still loads 24
+  // rows, but the oldest chat leaves first when the fixed budget is exceeded.
   while (context && estimateTokens(prompt) > tokenBudget) {
-    if (context.externalInformation.length > 2) context.externalInformation.pop();
-    else if (context.worldEvents.length > 3) context.worldEvents.pop();
-    else if (context.recentMessages.length > 16) context.recentMessages.shift();
+    if (context.recentMessages.length > 8) context.recentMessages.shift();
+    else if (context.externalInformation.length > 2) context.externalInformation.pop();
+    else if (context.worldEvents.length > 8) context.worldEvents.shift();
     else if (context.openLoops.length > 3) context.openLoops.pop();
     else break;
     prompt = render(input, context);

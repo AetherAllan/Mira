@@ -3,10 +3,10 @@ import { getDb } from "@/db/client";
 import { clamp01 } from "@/lib/number";
 import {
   awaitingReplies,
+  companionStates,
   events,
   shareCandidates,
   stateChanges,
-  worldStates,
 } from "@/db/schema";
 import {
   canExpressDissatisfaction,
@@ -61,12 +61,12 @@ export async function processAwaitingReplyTimeouts(
       )
       .for("update");
     if (rows.length === 0) return { processed: 0, emotionalChanges: 0 };
-    const [world] = await tx
+    const [state] = await tx
       .select()
-      .from(worldStates)
-      .where(eq(worldStates.companionId, companionId))
+      .from(companionStates)
+      .where(eq(companionStates.companionId, companionId))
       .for("update");
-    if (!world) throw new Error("World state is missing while processing awaiting replies");
+    if (!state) throw new Error("Companion state is missing while processing awaiting replies");
 
     let disappointmentDelta = 0;
     let irritationDelta = 0;
@@ -132,52 +132,68 @@ export async function processAwaitingReplyTimeouts(
     }
 
     if (disappointmentDelta !== 0 || irritationDelta !== 0) {
-      const disappointment = clamp01(world.disappointment + disappointmentDelta);
-      const irritation = clamp01(world.irritation + irritationDelta);
+      const disappointment = clamp01(state.moodJson.disappointment + disappointmentDelta);
+      const irritation = clamp01(state.moodJson.irritation + irritationDelta);
       const shareDesire = nextShareDesire(
-        world.shareDesire,
+        state.drivesJson.shareDesire,
         disappointmentDelta,
         irritationDelta,
       );
       await tx
-        .update(worldStates)
+        .update(companionStates)
         .set({
-          disappointment,
-          irritation,
-          shareDesire,
-          version: world.version + 1,
-          lastChangeReason: "awaiting reply contextual consequence",
-          lastCorrelationId: correlationId,
+          moodJson: { ...state.moodJson, disappointment, irritation },
+          drivesJson: { ...state.drivesJson, shareDesire },
+          stateReasonsJson: {
+            ...state.stateReasonsJson,
+            disappointment: [{
+              reason: "等待重要回复超过预期",
+              sourceType: "awaiting_reply",
+              correlationId,
+              impact: disappointmentDelta,
+              occurredAt: now.toISOString(),
+              expiresAt: new Date(now.getTime() + 72 * 60 * 60_000).toISOString(),
+            }],
+            irritation: [{
+              reason: "等待重要回复超过预期",
+              sourceType: "awaiting_reply",
+              correlationId,
+              impact: irritationDelta,
+              occurredAt: now.toISOString(),
+              expiresAt: new Date(now.getTime() + 72 * 60 * 60_000).toISOString(),
+            }],
+          },
+          version: state.version + 1,
           updatedAt: now,
         })
-        .where(eq(worldStates.id, world.id));
+        .where(eq(companionStates.id, state.id));
       await tx.insert(stateChanges).values([
         {
           companionId,
-          targetPath: "world.disappointment",
-          beforeJson: world.disappointment,
+          targetPath: "mood.disappointment",
+          beforeJson: state.moodJson.disappointment,
           afterJson: disappointment,
-          deltaJson: disappointment - world.disappointment,
+          deltaJson: disappointment - state.moodJson.disappointment,
           reason: "contextual awaiting reply consequence",
           causedBy: "awaiting_reply",
           correlationId,
         },
         {
           companionId,
-          targetPath: "world.irritation",
-          beforeJson: world.irritation,
+          targetPath: "mood.irritation",
+          beforeJson: state.moodJson.irritation,
           afterJson: irritation,
-          deltaJson: irritation - world.irritation,
+          deltaJson: irritation - state.moodJson.irritation,
           reason: "contextual awaiting reply consequence",
           causedBy: "awaiting_reply",
           correlationId,
         },
         {
           companionId,
-          targetPath: "world.shareDesire",
-          beforeJson: world.shareDesire,
+          targetPath: "drives.shareDesire",
+          beforeJson: state.drivesJson.shareDesire,
           afterJson: shareDesire,
-          deltaJson: shareDesire - world.shareDesire,
+          deltaJson: shareDesire - state.drivesJson.shareDesire,
           reason: "unanswered emotional context changed willingness to share",
           causedBy: "awaiting_reply",
           correlationId,
@@ -208,12 +224,12 @@ export async function resolveAwaitingReplies(input: {
       )
       .for("update");
     if (rows.length === 0) return { resolved: 0 };
-    const [world] = await tx
+    const [state] = await tx
       .select()
-      .from(worldStates)
-      .where(eq(worldStates.companionId, input.companionId))
+      .from(companionStates)
+      .where(eq(companionStates.companionId, input.companionId))
       .for("update");
-    if (!world) throw new Error("World state is missing while resolving awaiting replies");
+    if (!state) throw new Error("Companion state is missing while resolving awaiting replies");
     let disappointmentDelta = 0;
     let irritationDelta = 0;
     for (const row of rows) {
@@ -248,55 +264,50 @@ export async function resolveAwaitingReplies(input: {
           ),
         );
     }
-    const disappointment = clamp01(world.disappointment + disappointmentDelta);
-    const irritation = clamp01(world.irritation + irritationDelta);
+    const disappointment = clamp01(state.moodJson.disappointment + disappointmentDelta);
+    const irritation = clamp01(state.moodJson.irritation + irritationDelta);
     const shareDesire = nextShareDesire(
-      world.shareDesire,
+      state.drivesJson.shareDesire,
       disappointmentDelta,
       irritationDelta,
     );
     if (disappointmentDelta !== 0 || irritationDelta !== 0) {
       await tx
-        .update(worldStates)
+        .update(companionStates)
         .set({
-          disappointment,
-          irritation,
-          shareDesire,
-          version: world.version + 1,
-          lastChangeReason: input.explanationProvided
-            ? "user returned with an explanation; gradual recovery started"
-            : "user replied; gradual recovery started",
-          lastCorrelationId: input.correlationId,
+          moodJson: { ...state.moodJson, disappointment, irritation },
+          drivesJson: { ...state.drivesJson, shareDesire },
+          version: state.version + 1,
           updatedAt: now,
         })
-        .where(eq(worldStates.id, world.id));
+        .where(eq(companionStates.id, state.id));
       await tx.insert(stateChanges).values([
         {
           companionId: input.companionId,
-          targetPath: "world.disappointment",
-          beforeJson: world.disappointment,
+          targetPath: "mood.disappointment",
+          beforeJson: state.moodJson.disappointment,
           afterJson: disappointment,
-          deltaJson: disappointment - world.disappointment,
+          deltaJson: disappointment - state.moodJson.disappointment,
           reason: "partial recovery after user reply",
           causedBy: "user.message",
           correlationId: input.correlationId,
         },
         {
           companionId: input.companionId,
-          targetPath: "world.irritation",
-          beforeJson: world.irritation,
+          targetPath: "mood.irritation",
+          beforeJson: state.moodJson.irritation,
           afterJson: irritation,
-          deltaJson: irritation - world.irritation,
+          deltaJson: irritation - state.moodJson.irritation,
           reason: "partial recovery after user reply",
           causedBy: "user.message",
           correlationId: input.correlationId,
         },
         {
           companionId: input.companionId,
-          targetPath: "world.shareDesire",
-          beforeJson: world.shareDesire,
+          targetPath: "drives.shareDesire",
+          beforeJson: state.drivesJson.shareDesire,
           afterJson: shareDesire,
-          deltaJson: shareDesire - world.shareDesire,
+          deltaJson: shareDesire - state.drivesJson.shareDesire,
           reason: "user reply started gradual willingness-to-share recovery",
           causedBy: "user.message",
           correlationId: input.correlationId,

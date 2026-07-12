@@ -1,0 +1,14 @@
+ALTER TABLE "world_events" DROP CONSTRAINT "world_events_seed_id_event_seeds_id_fk";
+ALTER TABLE "world_events" DROP COLUMN "seed_id";
+ALTER TABLE "event_seeds" DISABLE ROW LEVEL SECURITY;
+DROP TABLE "event_seeds";
+ALTER TABLE "proactive_logs" DROP COLUMN "selected_seed_json";
+ALTER TABLE "world_states" DROP COLUMN "energy";
+ALTER TABLE "world_states" DROP COLUMN "boredom";
+ALTER TABLE "world_states" DROP COLUMN "curiosity";
+ALTER TABLE "world_states" DROP COLUMN "loneliness";
+ALTER TABLE "world_states" DROP COLUMN "irritation";
+ALTER TABLE "world_states" DROP COLUMN "disappointment";
+ALTER TABLE "world_states" DROP COLUMN "attachment";
+ALTER TABLE "world_states" DROP COLUMN "share_desire";
+ALTER TABLE "world_states" DROP COLUMN "emotion_reasons_json";

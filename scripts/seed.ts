@@ -10,5 +10,5 @@ const context = await ensureCompanionContext({
 });
 
 console.log(
-  `Seeded ${context.companion.name}: companion=${context.companion.id}, seeds=${context.seeds.length}`,
+  `Seeded ${context.companion.name}: companion=${context.companion.id}, characters=${context.world.characters.length}`,
 );

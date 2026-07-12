@@ -9,6 +9,7 @@ import {
 import { applyLongTermReflectionEvolution } from "@/db/reflectionRepo";
 import { zonedDateKey } from "@/lib/time";
 import { systemClock, weekdayForLocalDate } from "@/platform/time";
+import { addLocalDays, generateDailyLifePlan } from "@/world/dailyPlan";
 import {
   applyDailyReflection,
   reflectOnDay,
@@ -65,7 +66,7 @@ export async function runDailyReflection(now = systemClock.now()) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const latestState = await getCompanionState(context.companion.id);
     growth = applyDailyReflection(latestState, generated.reflection);
-    // Journal, state, audit rows and tomorrow seeds share one database commit.
+    // Journal, state and audit rows share one database commit.
     journalResult = await applyDailyReflectionTransaction({
       journalInput: {
         companionId: context.companion.id,
@@ -86,7 +87,6 @@ export async function runDailyReflection(now = systemClock.now()) {
       expectedState: latestState,
       state: growth.state,
       changes: growth.changes,
-      seeds: generated.reflection.tomorrowSeeds,
       userId: context.user.id,
       eventPayload: {
         usedFallback: generated.usedFallback,
@@ -106,6 +106,10 @@ export async function runDailyReflection(now = systemClock.now()) {
     correlationId,
     now,
   });
+  const tomorrowPlan = await generateDailyLifePlan(
+    context.companion.id,
+    addLocalDays(date, 1),
+  );
   if (!journalResult.created) {
     return {
       reflected: false,
@@ -113,26 +117,15 @@ export async function runDailyReflection(now = systemClock.now()) {
       date,
       journalId: journalResult.row.id,
       evolution,
+      tomorrowPlanId: tomorrowPlan.id,
     };
-  }
-  if (generated.reflection.tomorrowSeeds.length) {
-    await logRuntimeEvent({
-      userId: context.user.id,
-      companionId: context.companion.id,
-      type: "world.seed.created",
-      source: "growth",
-      payloadJson: {
-        journalId: journalResult.row.id,
-        seeds: generated.reflection.tomorrowSeeds,
-      },
-    });
   }
   return {
     reflected: true,
     date,
     journalId: journalResult.row.id,
     stateChanges: growth.changes.length,
-    tomorrowSeeds: generated.reflection.tomorrowSeeds.length,
     evolution,
+    tomorrowPlanId: tomorrowPlan.id,
   };
 }

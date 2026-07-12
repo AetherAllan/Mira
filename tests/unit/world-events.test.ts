@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  applyEventConsequences,
   generateOrdinaryWorldEvent,
   validatePhysicalWorldEvent,
   type OrdinaryEventDraft,
 } from "@/world/events";
-import type { ScheduleBlock, TripFeasibility, WorldEvent, WorldState } from "@/world/types";
+import type { ScheduleBlock, TripFeasibility, WorldEvent } from "@/world/types";
+import { applyWorldEventToCompanionState } from "@/psyche/stateReducer";
+import { INITIAL_STATE } from "@/seed/character";
 
 const occurredAt = new Date("2026-07-10T04:30:00.000Z");
 
@@ -22,24 +23,6 @@ function generated(seed: string, existingEvents: readonly WorldEvent[] = [], dra
     nonTemplateDraft: draft,
     eventChance: 1,
   });
-}
-
-function state(): WorldState {
-  return {
-    companionId: "mira",
-    currentTime: occurredAt,
-    currentLocationId: "studio",
-    energy: 0.5,
-    boredom: 0.2,
-    curiosity: 0.6,
-    loneliness: 0.1,
-    irritation: 0.1,
-    disappointment: 0.1,
-    attachment: 0.2,
-    shareDesire: 0.3,
-    lastWorldTickAt: occurredAt,
-    version: 2,
-  };
 }
 
 const scheduleBlock: ScheduleBlock = {
@@ -73,11 +56,10 @@ test("ordinary events replay from seed and apply bounded consequences", () => {
   assert.ok(first);
   assert.deepEqual(first, replay);
 
-  const applied = applyEventConsequences(state(), first!);
-  assert.equal(applied.state.version, 3);
-  assert.equal(applied.state.lastCorrelationId, first!.correlationId);
-  assert.ok(applied.stateChanges.length > 0);
-  assert.deepEqual(applied.pendingConsequences, first!.consequences);
+  const applied = applyWorldEventToCompanionState(INITIAL_STATE, first!);
+  assert.equal(applied.state.version, 1);
+  assert.ok(applied.changes.length > 0);
+  assert.equal(applied.state.stateReasons.boredom?.at(-1)?.sourceId, first!.id);
 });
 
 test("ordinary event density is capped at two and non-template at one per Beijing day", () => {

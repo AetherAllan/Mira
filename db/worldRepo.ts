@@ -14,13 +14,17 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import type { CharacterProfile } from "@/core/types";
+import type { CharacterProfile, CompanionState } from "@/core/types";
 import { getDb } from "@/db/client";
 import {
   companions,
+  companionStates,
   events,
   innerThoughts,
   knownPlaces,
+  memories,
+  openLoops,
+  plannedWorldEvents,
   scheduleBlocks,
   shareCandidates,
   stateChanges,
@@ -41,8 +45,9 @@ import {
 } from "@/seed/world";
 import { getCompletedTickWindow } from "@/world/reducer";
 import type { WorldTickResult } from "@/world/reducer";
-import type { ScheduleBlock, WorldEvent, WorldState } from "@/world/types";
+import type { PlannedWorldEvent, ScheduleBlock, WorldEvent, WorldState } from "@/world/types";
 import { buildThoughtAndShareCandidate } from "@/world/thoughts";
+import type { StateChangeDraft } from "@/psyche/growthEngine";
 
 type NewKnownPlace = typeof knownPlaces.$inferInsert;
 type NewWorldCharacter = typeof worldCharacters.$inferInsert;
@@ -51,6 +56,12 @@ export const WORLD_TICK_LEASE_MS = 2 * 60 * 1000;
 
 export class WorldTickLeaseLostError extends Error {}
 export class WorldStateConflictError extends Error {}
+
+export function beijingDayBounds(at: Date) {
+  const localDate = zonedDateKey(at, "Asia/Shanghai");
+  const start = new Date(`${localDate}T00:00:00+08:00`);
+  return { start, end: new Date(start.getTime() + 24 * 60 * 60_000) };
+}
 
 export type ClaimedWorldTick = WorldTickRunRow & { leaseToken: string };
 export type WorldTickClaimResult =
@@ -283,15 +294,6 @@ export function worldStateRowToDomain(row: WorldStateRow): WorldState {
     currentLocationId: row.currentLocationId ?? undefined,
     currentActivityId: row.currentActivityId ?? undefined,
     currentScheduleBlockId: row.currentScheduleBlockId ?? undefined,
-    energy: row.energy,
-    boredom: row.boredom,
-    curiosity: row.curiosity,
-    loneliness: row.loneliness,
-    irritation: row.irritation,
-    disappointment: row.disappointment,
-    attachment: row.attachment,
-    shareDesire: row.shareDesire,
-    affectReasons: row.emotionReasonsJson as WorldState["affectReasons"],
     lastChangeReason: row.lastChangeReason ?? undefined,
     lastCorrelationId: row.lastCorrelationId ?? undefined,
     lastWorldTickAt: row.lastWorldTickAt,
@@ -483,8 +485,13 @@ export async function commitWorldTick(input: {
   claim: ClaimedWorldTick;
   expectedState: WorldStateRow;
   result: WorldTickResult;
+  expectedCompanionState: CompanionState;
+  companionState: CompanionState;
+  companionStateChanges: StateChangeDraft[];
   mode: "detailed" | "aggregate";
   worldEvent?: WorldEvent | null;
+  plannedEvent?: PlannedWorldEvent | null;
+  createThought?: boolean;
   committedAt?: Date;
 }) {
   const committedAt = input.committedAt ?? new Date();
@@ -518,6 +525,14 @@ export async function commitWorldTick(input: {
     if (lockedState.lastWorldTickAt.getTime() !== input.claim.windowStart.getTime()) {
       throw new WorldStateConflictError("World state is not at the claimed window start");
     }
+    const [lockedCompanionState] = await tx
+      .select()
+      .from(companionStates)
+      .where(eq(companionStates.companionId, input.claim.companionId))
+      .for("update");
+    if (!lockedCompanionState || lockedCompanionState.version !== input.expectedCompanionState.version) {
+      throw new WorldStateConflictError("Companion state changed after tick planning");
+    }
 
     for (const transition of input.result.scheduleTransitions) {
       const [updatedBlock] = await tx
@@ -547,15 +562,6 @@ export async function commitWorldTick(input: {
         currentLocationId: next.currentLocationId ?? null,
         currentActivityId: next.currentActivityId ?? null,
         currentScheduleBlockId: next.currentScheduleBlockId ?? null,
-        energy: next.energy,
-        boredom: next.boredom,
-        curiosity: next.curiosity,
-        loneliness: next.loneliness,
-        irritation: next.irritation,
-        disappointment: next.disappointment,
-        attachment: next.attachment,
-        shareDesire: next.shareDesire,
-        emotionReasonsJson: next.affectReasons ?? lockedState.emotionReasonsJson,
         lastChangeReason:
           input.mode === "aggregate" ? "aggregated offline world progression" : "world tick",
         lastCorrelationId: input.claim.correlationId,
@@ -573,6 +579,26 @@ export async function commitWorldTick(input: {
       )
       .returning();
     if (!updatedState) throw new WorldStateConflictError("World state update lost its version race");
+
+    const psychological = input.companionState;
+    const [updatedCompanionState] = await tx
+      .update(companionStates)
+      .set({
+        traitsJson: psychological.traits,
+        moodJson: psychological.mood,
+        drivesJson: psychological.drives,
+        relationshipJson: psychological.relationship,
+        activeArcsJson: psychological.activeArcs,
+        stateReasonsJson: psychological.stateReasons,
+        version: psychological.version,
+        updatedAt: committedAt,
+      })
+      .where(and(
+        eq(companionStates.id, lockedCompanionState.id),
+        eq(companionStates.version, input.expectedCompanionState.version),
+      ))
+      .returning({ id: companionStates.id });
+    if (!updatedCompanionState) throw new WorldStateConflictError("Companion state update lost its version race");
 
     if (
       next.currentLocationId &&
@@ -615,6 +641,29 @@ export async function commitWorldTick(input: {
         })),
       );
     }
+    if (input.companionStateChanges.length > 0) {
+      await tx.insert(stateChanges).values(input.companionStateChanges.map((change) => ({
+        companionId: input.claim.companionId,
+        targetPath: change.targetPath,
+        beforeJson: change.beforeJson,
+        afterJson: change.afterJson,
+        deltaJson: change.deltaJson,
+        reason: change.reason,
+        causedBy: change.causedBy,
+        correlationId: input.claim.correlationId,
+      })));
+    }
+
+    if (input.plannedEvent?.status === "skipped" && !input.worldEvent) {
+      await tx.update(plannedWorldEvents).set({
+        status: "skipped",
+        selectionReason: input.plannedEvent.selectionReason,
+        updatedAt: committedAt,
+      }).where(and(
+        eq(plannedWorldEvents.id, input.plannedEvent.id),
+        eq(plannedWorldEvents.status, "planned"),
+      ));
+    }
 
     if (input.worldEvent) {
       const event = input.worldEvent;
@@ -650,6 +699,65 @@ export async function commitWorldTick(input: {
         throw new WorldStateConflictError("World event idempotency key was already committed");
       }
 
+      if (input.plannedEvent) {
+        const [updatedPlanEvent] = await tx
+          .update(plannedWorldEvents)
+          .set({
+            status: "occurred",
+            occurredEventId: event.id,
+            selectionReason: input.plannedEvent.selectionReason ?? "materialized_in_window",
+            updatedAt: committedAt,
+          })
+          .where(and(
+            eq(plannedWorldEvents.id, input.plannedEvent.id),
+            inArray(plannedWorldEvents.status, ["planned", "selected"]),
+          ))
+          .returning({ id: plannedWorldEvents.id });
+        if (!updatedPlanEvent) throw new WorldStateConflictError("Planned event was already finalized");
+
+        const action = typeof input.plannedEvent.loop.action === "string"
+          ? input.plannedEvent.loop.action
+          : "none";
+        const topic = typeof input.plannedEvent.loop.topic === "string"
+          ? input.plannedEvent.loop.topic.trim()
+          : "";
+        if (action === "create" && topic) {
+          const activeLoops = await tx.select({ id: openLoops.id }).from(openLoops).where(and(
+            eq(openLoops.companionId, input.claim.companionId),
+            inArray(openLoops.status, ["open", "waiting"]),
+          )).limit(10);
+          if (activeLoops.length < 10) {
+            await tx.insert(openLoops).values({
+              companionId: input.claim.companionId,
+              idempotencyKey: `planned-loop:${input.plannedEvent.id}`,
+              owner: "mira",
+              topic,
+              description: typeof input.plannedEvent.loop.description === "string"
+                ? input.plannedEvent.loop.description
+                : event.description,
+              emotionalWeight: event.importance,
+              status: "open",
+              sourceType: "world_event",
+              sourceId: event.id,
+              nextAction: typeof input.plannedEvent.loop.nextAction === "string"
+                ? input.plannedEvent.loop.nextAction
+                : undefined,
+              correlationId: input.claim.correlationId,
+            }).onConflictDoNothing({ target: [openLoops.companionId, openLoops.idempotencyKey] });
+          }
+        } else if (action === "resolve" && topic) {
+          await tx.update(openLoops).set({
+            status: "resolved",
+            resolution: event.description,
+            updatedAt: committedAt,
+          }).where(and(
+            eq(openLoops.companionId, input.claim.companionId),
+            eq(openLoops.topic, topic),
+            inArray(openLoops.status, ["open", "waiting"]),
+          ));
+        }
+      }
+
       if (event.characterIds.length > 0) {
         await tx
           .update(worldCharacters)
@@ -682,7 +790,40 @@ export async function commitWorldTick(input: {
         },
       });
 
-      const thoughtBundle = buildThoughtAndShareCandidate(event);
+      if (event.importance >= 0.65) {
+        // Compute the Beijing day boundary in JavaScript, then let Drizzle
+        // bind ordinary timestamps. This avoids subtle PostgreSQL precedence
+        // errors around `date + interval AT TIME ZONE` inside the transaction.
+        const memoryDay = beijingDayBounds(event.occurredAt);
+        const [memoryCountRow] = await tx.select({ count: sql<number>`COUNT(*)::int` })
+          .from(memories)
+          .where(and(
+            eq(memories.companionId, input.claim.companionId),
+            gte(memories.createdAt, memoryDay.start),
+            lt(memories.createdAt, memoryDay.end),
+            inArray(memories.kind, ["self_memory", "world_experience"]),
+          ));
+        const memoryCount = Number(memoryCountRow?.count ?? 0);
+        if (memoryCount < 3) {
+          const [owner] = await tx.select({ userId: companions.userId })
+            .from(companions).where(eq(companions.id, input.claim.companionId)).limit(1);
+          if (owner) {
+            await tx.insert(memories).values({
+              userId: owner.userId,
+              companionId: input.claim.companionId,
+              kind: event.characterIds.length ? "world_experience" : "self_memory",
+              content: `${event.title}：${event.description}`,
+              tagsJson: [event.type, ...(event.characterIds.length ? ["relationship"] : ["self_life"])],
+              importance: event.importance,
+              confidence: 1,
+            });
+          }
+        }
+      }
+
+      const thoughtBundle = input.createThought === false
+        ? null
+        : buildThoughtAndShareCandidate(event, input.plannedEvent?.innerNarrative);
       if (thoughtBundle) {
         const { thought, candidate } = thoughtBundle;
         await tx.insert(innerThoughts).values({
@@ -702,30 +843,7 @@ export async function commitWorldTick(input: {
           correlationId: input.claim.correlationId,
           createdAt: thought.createdAt,
         });
-        // A newer candidate may replace older, equally or less important
-        // unshared material. Higher-priority rows use smaller priority numbers.
-        await tx
-          .update(shareCandidates)
-          .set({
-            status: "suppressed",
-            suppressionReason: `covered_by:${candidate.id}`,
-            updatedAt: candidate.createdAt,
-          })
-          .where(
-            and(
-              eq(shareCandidates.companionId, input.claim.companionId),
-              eq(shareCandidates.status, "pending"),
-              or(
-                gt(shareCandidates.priority, candidate.priority),
-                and(
-                  eq(shareCandidates.priority, candidate.priority),
-                  lt(shareCandidates.eventImportance, candidate.eventImportance),
-                ),
-              ),
-              lte(shareCandidates.createdAt, candidate.createdAt),
-            ),
-          );
-        await tx.insert(shareCandidates).values({
+        if (candidate) await tx.insert(shareCandidates).values({
           id: candidate.id,
           companionId: input.claim.companionId,
           idempotencyKey: `candidate:${thought.id}`,
@@ -747,6 +865,27 @@ export async function commitWorldTick(input: {
           correlationId: input.claim.correlationId,
           createdAt: candidate.createdAt,
         });
+        if (candidate) {
+          const activeCandidates = await tx.select({ id: shareCandidates.id })
+            .from(shareCandidates)
+            .where(and(
+              eq(shareCandidates.companionId, input.claim.companionId),
+              eq(shareCandidates.status, "pending"),
+            ))
+            .orderBy(
+              asc(shareCandidates.priority),
+              desc(shareCandidates.eventImportance),
+              desc(shareCandidates.createdAt),
+            );
+          const overflowIds = activeCandidates.slice(3).map((row) => row.id);
+          if (overflowIds.length) {
+            await tx.update(shareCandidates).set({
+              status: "suppressed",
+              suppressionReason: "active_candidate_cap",
+              updatedAt: committedAt,
+            }).where(inArray(shareCandidates.id, overflowIds));
+          }
+        }
         await tx.insert(events).values([
           {
             companionId: input.claim.companionId,
@@ -755,7 +894,7 @@ export async function commitWorldTick(input: {
             correlationId: input.claim.correlationId,
             payloadJson: { innerThoughtId: thought.id, worldEventId: event.id },
           },
-          {
+          ...(candidate ? [{
             companionId: input.claim.companionId,
             type: "share_candidate.created",
             source: "inner_thought",
@@ -765,7 +904,7 @@ export async function commitWorldTick(input: {
               innerThoughtId: thought.id,
               expiresAt: candidate.expiresAt?.toISOString(),
             },
-          },
+          }] : []),
         ]);
       }
     }

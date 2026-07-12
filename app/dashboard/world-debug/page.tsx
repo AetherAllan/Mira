@@ -9,6 +9,9 @@ export default async function WorldDebugPage() {
   const sections = [
     ["WorldHealth", debug.worldHealth, "时钟新鲜度、cron、今日日程和当前活动一致性。"],
     ["WorldState", debug.worldState, "当前权威世界状态与版本。"],
+    ["CompanionState", debug.companionState, "唯一心理状态、drives、关系、原因与版本。"],
+    ["DailyLifePlans", debug.dailyPlans, "每日 AI 计划、采样 seed 与校验结果。"],
+    ["PlannedWorldEvents", debug.plannedWorldEvents, "required/candidate 时间窗、抽取原因与物化状态。"],
     ["Schedule", debug.schedule, "日程来源、状态、地点与变更原因。"],
     ["Characters", debug.characters, "稳定虚构配角与关系状态。"],
     ["OpenLoops", debug.openLoops, "未完成承诺、建议和后续。"],
