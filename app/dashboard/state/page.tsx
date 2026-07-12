@@ -1,5 +1,5 @@
 import { loadDashboardData } from "@/components/dashboard/data";
-import { DataStatus, MetricGroup, PageIntro, Panel } from "@/components/dashboard/ui";
+import { MetricGroup, PageIntro, Panel } from "@/components/dashboard/ui";
 import { TraitRadar } from "@/components/dashboard/TraitRadar";
 import { MoodChart } from "@/components/dashboard/MoodChart";
 import { DriveChart } from "@/components/dashboard/DriveChart";
@@ -14,7 +14,6 @@ export default async function StatePage() {
   return (
     <>
       <PageIntro title="Companion state vector" description="Traits 是慢变量；mood、drives 与 relationship 是受限状态。任何变化都必须能回到 reason 和 causedBy。" />
-      <DataStatus source={data.source} error={data.connectionError} />
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel title="Traits" description="稳定人格。Daily reflection 单字段单日变化不超过 0.01。"><div className="grid items-center gap-4 md:grid-cols-[1fr_1.15fr]"><TraitRadar traits={data.state.traits} /><MetricGroup values={data.state.traits} tone="cyan" /></div></Panel>
         <Panel title="Mood" description="短期情绪向量，用于语气与注意力，不直接定义身份。"><MetricGroup values={data.state.mood} tone="violet" /></Panel>
@@ -26,4 +25,3 @@ export default async function StatePage() {
     </>
   );
 }
-

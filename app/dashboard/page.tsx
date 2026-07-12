@@ -1,7 +1,7 @@
 import { Database, Image, MessageSquareText, Sparkles } from "lucide-react";
 import { loadDashboardData } from "@/components/dashboard/data";
 import { ArcList } from "@/components/dashboard/ArcList";
-import { DataStatus, PageIntro, Panel, ValueBar } from "@/components/dashboard/ui";
+import { PageIntro, Panel, ValueBar } from "@/components/dashboard/ui";
 import { StatCard } from "@/components/layout/StatCard";
 import { StateOverview } from "@/components/dashboard/StateOverview";
 import { MoodChart } from "@/components/dashboard/MoodChart";
@@ -17,7 +17,6 @@ export default async function DashboardPage() {
   return (
     <>
       <PageIntro title={`${data.companion.name} / runtime pulse`} description="一眼确认她今天说了什么、为什么主动、状态是否漂移，以及任何需要审查的异常。" />
-      <DataStatus source={data.source} error={data.connectionError} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Messages today" value={data.stats.todayMessages} description="user + assistant，可观测交互总量" icon={MessageSquareText} trend={3} />
         <StatCard label="Proactive today" value={`${data.stats.todayProactive} / ${data.companion.configJson.policy.proactiveMaxPerDay}`} description={`剩余预算 ${data.stats.proactiveRemaining} 条`} icon={Sparkles} tone="violet" />
@@ -44,4 +43,3 @@ export default async function DashboardPage() {
     </>
   );
 }
-

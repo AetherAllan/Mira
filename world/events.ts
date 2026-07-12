@@ -1,4 +1,5 @@
-import { clamp01, zonedDateKey } from "@/lib/time";
+import { clamp01 } from "@/lib/number";
+import { zonedDateKey } from "@/lib/time";
 import { createSeededRandom, createWorldSeed, deterministicUuid } from "@/world/random";
 import type {
   ScheduleBlock,

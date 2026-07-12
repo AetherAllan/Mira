@@ -8,7 +8,7 @@ import type {
   SeedCard,
 } from "@/core/types";
 import {
-  bootstrapCompanion,
+  ensureCompanionContext,
   claimMessageProcessing,
   completeMessageProcessing,
   countTodayToolCalls,
@@ -302,7 +302,7 @@ async function persistSafetyReply(
 
 export async function handleTelegramMessage(message: TelegramTextMessage) {
   const correlationId = randomUUID();
-  const context = await bootstrapCompanion({
+  const context = await ensureCompanionContext({
     telegramUserId: message.userId,
     displayName: message.displayName,
   });

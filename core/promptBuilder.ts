@@ -191,7 +191,3 @@ export function buildBudgetedActorPrompt(
     contextHash: createHash("sha256").update(prompt).digest("hex"),
   };
 }
-
-export function buildActorPrompt(input: ActorPromptInput): string {
-  return buildBudgetedActorPrompt(input).prompt;
-}

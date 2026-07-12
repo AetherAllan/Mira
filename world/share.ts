@@ -1,4 +1,5 @@
 import type { ShareCandidate } from "@/world/types";
+import { clamp01 } from "@/lib/number";
 
 export interface ShareScoreContext {
   currentShareDesire: number;
@@ -32,11 +33,6 @@ export function shouldSuppressCandidate(
   );
 }
 
-function clamp01(value: number) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
-}
-
 export function scoreShareCandidate(
   candidate: Pick<
     ShareCandidate,
@@ -50,17 +46,17 @@ export function scoreShareCandidate(
   context: ShareScoreContext,
 ): ShareEvaluation {
   const base =
-    0.24 * clamp01(candidate.emotionalIntensity) +
-    0.22 * clamp01(candidate.relevanceToUser) +
-    0.15 * clamp01(candidate.novelty) +
-    0.12 * clamp01(candidate.intimacy) +
-    0.12 * clamp01(candidate.urgency) +
-    0.09 * clamp01(context.eventImportance) +
-    0.06 * clamp01(context.currentShareDesire);
+    0.24 * clamp01(candidate.emotionalIntensity || 0) +
+    0.22 * clamp01(candidate.relevanceToUser || 0) +
+    0.15 * clamp01(candidate.novelty || 0) +
+    0.12 * clamp01(candidate.intimacy || 0) +
+    0.12 * clamp01(candidate.urgency || 0) +
+    0.09 * clamp01(context.eventImportance || 0) +
+    0.06 * clamp01(context.currentShareDesire || 0);
   const penalty =
-    0.15 * clamp01(candidate.interruptionCost) +
-    0.05 * clamp01(context.miraIrritation) +
-    0.04 * (1 - clamp01(context.relationshipTrust));
+    0.15 * clamp01(candidate.interruptionCost || 0) +
+    0.05 * clamp01(context.miraIrritation || 0) +
+    0.04 * (1 - clamp01(context.relationshipTrust || 0));
   const score = clamp01(base - penalty);
   const blockedBy: string[] = [];
   const dailyLimit = context.dailyLimit ?? 3;

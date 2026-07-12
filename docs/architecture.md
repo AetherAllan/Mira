@@ -60,7 +60,7 @@ Schedule intervals are half-open: `startAt <= now < endAt`. World state is fresh
 
 Weekday/weekend templates provide routine. Open loops and recent facts can propose adjustments; a seeded optional block provides bounded variation. Every change records `source`, `changeReason` and `correlationId`.
 
-Nominatim results are cached before selected rows are persisted. Deduplication uses provider POI identity first, then normalized name plus coordinates within 150m. OSRM feasibility checks time, cost, opening state, reservation, weather and the available schedule window. Provider calls are never made inside a database transaction.
+Provider calls are never made inside a database transaction.
 
 Open-Meteo facts are short lived. Rain, snow or thunderstorms can replace a future outdoor block with the nearest feasible indoor known place, but only within 12 hours. The physical weather event, schedule change and audit state change commit together and share an idempotency key.
 
@@ -99,7 +99,6 @@ Definite Telegram failures may follow bounded retry policy. A network timeout af
 
 ## Provider failure and cost boundaries
 
-- Nominatim: 7-day cache; OSRM: 30-minute cache.
 - Open-Meteo: 30-minute cache; GDELT: 2-hour cache.
 - Public map requests are serialized to one request per second per instance. Every provider is best effort and cannot block deterministic world progression.
 - Native fetch timeout and one retry for 429/5xx.

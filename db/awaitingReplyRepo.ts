@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db/client";
+import { clamp01 } from "@/lib/number";
 import {
   awaitingReplies,
   events,
@@ -14,10 +15,6 @@ import {
 } from "@/world/awaitingReply";
 import { deterministicUuid } from "@/world/random";
 import type { AwaitingReply } from "@/world/types";
-
-function clamp01(value: number) {
-  return Math.min(1, Math.max(0, value));
-}
 
 function toDomain(row: typeof awaitingReplies.$inferSelect): AwaitingReply {
   return {

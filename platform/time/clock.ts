@@ -5,8 +5,3 @@ export interface Clock {
 export const systemClock: Clock = {
   now: () => new Date(),
 };
-
-export function fixedClock(instant: Date): Clock {
-  const fixed = new Date(instant);
-  return { now: () => new Date(fixed) };
-}

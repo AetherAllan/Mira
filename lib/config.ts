@@ -1,17 +1,7 @@
-import { resolveFreeChatModel } from "@/llm/models";
-
 function required(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured`);
   return value;
-}
-
-export function getLlmConfig() {
-  return {
-    baseUrl: (process.env.BASE_URL?.trim() || "https://openrouter.ai/api/v1").replace(/\/$/, ""),
-    apiKey: required("API_KEY"),
-    model: resolveFreeChatModel(process.env.MODEL),
-  };
 }
 
 export function getTelegramConfig() {
@@ -22,14 +12,6 @@ export function getTelegramConfig() {
   };
 }
 
-export function getCronSecret() {
-  return required("CRON_SECRET");
-}
-
 export function getAdminPassword() {
   return required("ADMIN_PASSWORD");
-}
-
-export function hasDatabaseConfig() {
-  return Boolean(process.env.DATABASE_URL?.trim());
 }

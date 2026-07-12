@@ -1,7 +1,3 @@
-export function clamp01(value: number) {
-  return Math.min(1, Math.max(0, value));
-}
-
 export function isValidTimeZone(value: string) {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
@@ -40,12 +36,7 @@ export function hoursSince(date: Date | string | null | undefined, now = new Dat
   return Math.max(0, (now.getTime() - new Date(date).getTime()) / 3_600_000);
 }
 
-export function formatTimestamp(value: Date | string | null | undefined) {
-  if (!value) return "—";
-  return formatZonedTimestamp(new Date(value), "Asia/Shanghai");
-}
 import {
-  formatZonedTimestamp,
   localDateAt,
   systemClock,
   zonedMinutesAt,

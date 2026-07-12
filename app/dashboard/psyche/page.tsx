@@ -1,6 +1,6 @@
 import { Brain, CirclePause, Footprints, Sparkles } from "lucide-react";
 import { loadDashboardData } from "@/components/dashboard/data";
-import { DataStatus, KeyValue, MetricGroup, PageIntro, Panel } from "@/components/dashboard/ui";
+import { KeyValue, MetricGroup, PageIntro, Panel } from "@/components/dashboard/ui";
 import { Badge } from "@/components/ui/badge";
 import { JsonInspector } from "@/components/dashboard/JsonInspector";
 import { formatDate } from "@/components/dashboard/format";
@@ -19,7 +19,6 @@ export default async function PsychePage() {
   return (
     <>
       <PageIntro title="Id / Ego / Actor" description="驱动提出愿望，Ego 选择行动，Actor 直接写出并发送。危机仍走独立安全短路。" />
-      <DataStatus source={data.source} error={data.connectionError} />
       <div className="grid gap-3 md:grid-cols-3">
         <Panel title="今天想做什么" description="Id / strongest current impulse" action={<Sparkles className="size-4 text-amber-300" />}><p className="text-sm leading-6 text-zinc-300">探索一个不来自用户最近项目的内在世界场景。</p><p className="mt-2 text-[10px] text-zinc-600">noveltySeeking {data.state.drives.noveltySeeking.toFixed(2)} · aestheticUrge {data.state.drives.aestheticUrge.toFixed(2)}</p></Panel>
         <Panel title="为什么没做" description="Ego / restraint is a valid action" action={<CirclePause className="size-4 text-zinc-500" />}><p className="text-sm leading-6 text-zinc-300">{held?.reason ?? "没有被拦下的主动计划。"}</p>{held ? <p className="mt-2 font-mono text-[9px] text-zinc-700">{formatDate(held.createdAt)}</p> : null}</Panel>

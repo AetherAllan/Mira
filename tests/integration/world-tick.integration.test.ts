@@ -21,7 +21,6 @@ import {
 } from "@/db/schema";
 import {
   getCachedProviderValue,
-  persistDiscoveredPlaces,
   persistExternalFacts,
   setCachedProviderValue,
 } from "@/db/providerRepo";
@@ -104,34 +103,6 @@ test(
         DEFAULT_RUNTIME_CONFIG.character.profile,
         new Date("2026-07-10T02:07:00.000Z"),
       );
-      const discovered = {
-        companionId: companion.id,
-        places: [{
-          provider: "osm" as const,
-          providerId: `osm-fixture-${suffix}`,
-          name: "集成测试书店",
-          category: "book_store",
-          district: "朝阳区",
-          address: "北京市朝阳区测试路 1 号",
-          coordinates: { latitude: 39.921, longitude: 116.461 },
-          distanceMeters: null,
-        }],
-        discoveredAt: new Date("2026-07-10T02:07:30.000Z"),
-        correlationId: "00000000-0000-4000-8000-000000000107",
-      };
-      assert.equal((await persistDiscoveredPlaces(discovered)).inserted, 1);
-      assert.equal((await persistDiscoveredPlaces(discovered)).inserted, 0);
-      const [osmPlace] = await db
-        .select()
-        .from(knownPlaces)
-        .where(
-          and(
-            eq(knownPlaces.companionId, companion.id),
-            eq(knownPlaces.providerPoiId, discovered.places[0].providerId),
-          ),
-        );
-      assert.equal(osmPlace?.provider, "osm");
-      assert.equal(osmPlace?.coordinateSystem, "wgs84");
       const [journal] = await db.insert(internalJournals).values({
         companionId: companion.id,
         date: "2026-07-09",

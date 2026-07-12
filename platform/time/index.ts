@@ -5,7 +5,7 @@ export {
   type TemporalContext,
 } from "@/platform/time/temporal-context";
 export { activeIntervalAt, intervalContains } from "@/platform/time/schedule";
-export { fixedClock, systemClock, type Clock } from "@/platform/time/clock";
+export { systemClock, type Clock } from "@/platform/time/clock";
 export {
   isWeekendLocalDate,
   weekdayForLocalDate,

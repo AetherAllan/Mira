@@ -1,6 +1,4 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Database, FlaskConical, Info } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { labelForKey, percent } from "@/components/dashboard/format";
@@ -13,34 +11,6 @@ export function PageIntro({ title, description, actions }: { title: string; desc
         <p className="mt-1 max-w-3xl text-sm leading-6 text-zinc-500">{description}</p>
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
-    </div>
-  );
-}
-
-export function DataStatus({ source, error }: { source: "database" | "demo"; error?: string }) {
-  const live = source === "database";
-  return (
-    <div
-      className={cn(
-        "mb-5 flex items-start gap-3 rounded-md border px-3 py-2.5 text-xs",
-        live
-          ? "border-emerald-400/15 bg-emerald-400/[0.05] text-emerald-200/80"
-          : "border-amber-400/15 bg-amber-400/[0.05] text-amber-100/70",
-      )}
-    >
-      {live ? <Database className="mt-0.5 size-3.5 shrink-0" /> : error ? <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> : <FlaskConical className="mt-0.5 size-3.5 shrink-0" />}
-      <div>
-        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.15em]">
-          {live ? "Database snapshot" : "Demo snapshot"}
-        </span>
-        <p className="mt-0.5 text-[11px] leading-4 opacity-70">
-          {live
-            ? "以下数据来自 Neon 当前快照。"
-            : error
-              ? `数据库查询失败，当前展示安全演示数据：${error}`
-              : "未配置 DATABASE_URL，当前展示可交互的演示数据；不会伪装成真实运行记录。"}
-        </p>
-      </div>
     </div>
   );
 }
@@ -142,13 +112,5 @@ export function KeyValue({ label, value, note }: { label: string; value: ReactNo
       </div>
       <div className="text-right font-mono text-xs text-zinc-200">{value}</div>
     </div>
-  );
-}
-
-export function ExplainBadge({ children }: { children: ReactNode }) {
-  return (
-    <Badge className="gap-1 normal-case tracking-normal">
-      <Info className="size-2.5" /> {children}
-    </Badge>
   );
 }

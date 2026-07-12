@@ -1,4 +1,4 @@
-import { splitTelegramBubbles, TELEGRAM_BUBBLE_LIMIT } from "@/messaging/bubbles";
+import { TELEGRAM_BUBBLE_LIMIT } from "@/messaging/bubbles";
 
 interface TelegramApiResponse {
   ok?: boolean;
@@ -72,18 +72,4 @@ export async function sendTelegramBubble(chatId: string, text: string): Promise<
     );
   }
   return { messageId: body.result?.message_id ?? null, raw: body };
-}
-
-/** Compatibility wrapper. Runtime delivery now uses the durable outbox. */
-export async function sendTelegramMessage(chatId: string, text: string): Promise<{
-  messageId: number | null;
-  raw: TelegramApiResponse;
-  parts: number;
-}> {
-  const bubbles = splitTelegramBubbles(text);
-  if (!bubbles.length) throw new Error("Telegram send failed: empty message");
-
-  let last: Awaited<ReturnType<typeof sendTelegramBubble>> | null = null;
-  for (const bubble of bubbles) last = await sendTelegramBubble(chatId, bubble);
-  return { messageId: last!.messageId, raw: last!.raw, parts: bubbles.length };
 }

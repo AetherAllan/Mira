@@ -1,4 +1,5 @@
 import { assertScheduleHasNoConflicts } from "@/world/planner";
+import { clamp01 } from "@/lib/number";
 import {
   WORLD_TICK_MINUTES,
   type ScheduleBlock,
@@ -57,10 +58,6 @@ export function getTickWindow(at: Date): TickWindow {
 export function getCompletedTickWindow(at: Date): TickWindow {
   const end = Math.floor(at.getTime() / TICK_MS) * TICK_MS;
   return { windowStart: new Date(end - TICK_MS), windowEnd: new Date(end) };
-}
-
-function clamp01(value: number) {
-  return Math.min(1, Math.max(0, value));
 }
 
 function decayToward(value: number, target: number, ratePerHour: number, hours: number) {

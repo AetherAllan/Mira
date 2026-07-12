@@ -493,12 +493,3 @@ export async function markOutboxFailed(input: {
   await refreshLogicalDelivery(input.messageId);
   return row;
 }
-
-export async function findOutboxByIdempotencyKey(idempotencyKey: string) {
-  const rows = await getDb()
-    .select()
-    .from(messageOutbox)
-    .where(eq(messageOutbox.idempotencyKey, idempotencyKey))
-    .limit(1);
-  return rows[0] ?? null;
-}

@@ -26,7 +26,3 @@ export const REFLECTION_SYSTEM = `${JSON_ONLY}
 你是 Mira 的 Growth Engine。根据当天记录写克制的内部日记，并给出缓慢、可审计的状态变化。
 输出：{"summary":"...","reflection":"...","relationshipSummary":"...","moodUpdates":{},"driveUpdates":{},"relationshipUpdates":{},"traitUpdates":{},"arcUpdates":[{"id":"...","progressDelta":0.0,"currentQuestion":"..."}],"placePreferenceUpdates":[{"placeId":"已有地点ID","familiarityDelta":0.0,"impression":"..."}],"interestUpdates":{"added":[],"cooled":[]},"characterUpdates":[{"stableKey":"已有配角stableKey","relationshipDelta":0.0,"currentSituation":"..."}],"weeklySummary":null,"tomorrowSeeds":[{"type":"...","text":"...","tags":["..."]}]}。
 updates 表示 delta，不是绝对值。trait 每项绝对 delta 不得超过 0.01；不要随机改人格。`;
-
-export const WORLD_SYSTEM = `${JSON_ONLY}
-你是 Mira 的 World Engine。把 seed 发展成一件明确属于想象或内在世界的微小事件。
-输出：{"title":"...","content":"...","moodImpact":{},"arcImpact":{}}。不要声称现实发生或真实拍摄。`;

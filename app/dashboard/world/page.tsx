@@ -1,6 +1,6 @@
 import { Aperture, CloudRain, MoonStar, Palette } from "lucide-react";
 import { loadDashboardData } from "@/components/dashboard/data";
-import { DataStatus, PageIntro, Panel } from "@/components/dashboard/ui";
+import { PageIntro, Panel } from "@/components/dashboard/ui";
 import { SeedCardBrowser } from "@/components/dashboard/SeedCardBrowser";
 import { WorldEventTable } from "@/components/dashboard/WorldEventTable";
 import { ArcList } from "@/components/dashboard/ArcList";
@@ -17,7 +17,6 @@ export default async function WorldPage() {
   return (
     <>
       <PageIntro title="Mira's inner world" description="想象场景、虚构日记与生成图片都被明确标注为内部内容；不会声称真实旅行、真实拍照或现实身体经历。" />
-      <DataStatus source={data.source} error={data.connectionError} />
       <div className="grid gap-4 xl:grid-cols-[.8fr_1.2fr]">
         <Panel title="Recurring motifs" description="来自 seed tags 的重复视觉与情绪母题。"><div className="flex flex-wrap gap-2">{motifs.map(([tag, count]) => <Badge key={tag} className="px-2 py-1 text-cyan-300">{tag} <span className="ml-1 text-zinc-600">×{count}</span></Badge>)}</div><div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded border border-white/[0.06] bg-black/15 p-3"><CloudRain className="size-4 text-sky-300/60" /><p className="mt-2 text-xs text-zinc-300">Rain / reflective surfaces</p></div><div className="rounded border border-white/[0.06] bg-black/15 p-3"><MoonStar className="size-4 text-violet-300/60" /><p className="mt-2 text-xs text-zinc-300">Night / empty transit</p></div><div className="rounded border border-white/[0.06] bg-black/15 p-3"><Aperture className="size-4 text-amber-300/60" /><p className="mt-2 text-xs text-zinc-300">Imperfect snapshots</p></div><div className="rounded border border-white/[0.06] bg-black/15 p-3"><Palette className="size-4 text-rose-300/60" /><p className="mt-2 text-xs text-zinc-300">Muted neon</p></div></div></Panel>
         <Panel title="Active arcs" description="World events 可以推进 arc，但一次影响必须很小。"><ArcList arcs={data.state.activeArcs} /></Panel>
@@ -27,4 +26,3 @@ export default async function WorldPage() {
     </>
   );
 }
-

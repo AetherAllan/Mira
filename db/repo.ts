@@ -52,8 +52,6 @@ import { createSeededRandom, createWorldSeed } from "@/world/random";
 type NewMessage = Omit<typeof messages.$inferInsert, "id" | "createdAt">;
 type NewAnnotation = Omit<typeof messageAnnotations.$inferInsert, "id" | "createdAt">;
 type NewEvent = Omit<typeof events.$inferInsert, "id" | "createdAt">;
-type NewStateChange = Omit<typeof stateChanges.$inferInsert, "id" | "createdAt">;
-type NewToolCall = Omit<typeof toolCalls.$inferInsert, "id" | "createdAt">;
 type NewProactiveLog = Omit<typeof proactiveLogs.$inferInsert, "id" | "createdAt">;
 type NewJournal = Omit<typeof internalJournals.$inferInsert, "id" | "createdAt">;
 type NewWorldEvent = Omit<typeof worldEvents.$inferInsert, "id" | "createdAt">;
@@ -264,8 +262,6 @@ export async function ensureCompanionContext(
   return { user, companion, state: stateFromRow(stateRow), stateRow, seeds, world };
 }
 
-export const bootstrapCompanion = ensureCompanionContext;
-
 export async function getRuntimeContext(telegramUserId?: string) {
   return ensureCompanionContext({ telegramUserId });
 }
@@ -389,28 +385,6 @@ export async function completeMessageProcessing(messageId: string) {
     .where(eq(messages.id, messageId))
     .returning();
   return rows[0] ?? null;
-}
-
-export async function hasMessageProcessingClaim(
-  messageId: string,
-  leaseToken: string,
-) {
-  const rows = await getDb()
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.id, messageId),
-        eq(messages.processingStatus, "processing"),
-        eq(messages.processingLeaseToken, leaseToken),
-        or(
-          isNull(messages.processingLeaseExpiresAt),
-          gte(messages.processingLeaseExpiresAt, new Date()),
-        ),
-      ),
-    )
-    .limit(1);
-  return Boolean(rows[0]);
 }
 
 export async function renewMessageProcessing(
@@ -646,45 +620,6 @@ export async function setSeedEnabled(id: string, enabled: boolean, companionId?:
   return rows[0] ?? null;
 }
 
-export async function updateCompanionStateIfCurrent(
-  companionId: string,
-  expected: CompanionState,
-  state: CompanionState,
-) {
-  const rows = await getDb()
-    .update(companionStates)
-    .set({
-      traitsJson: state.traits,
-      moodJson: state.mood,
-      drivesJson: state.drives,
-      relationshipJson: state.relationship,
-      activeArcsJson: state.activeArcs,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(companionStates.companionId, companionId),
-        sql`${companionStates.traitsJson} = ${JSON.stringify(expected.traits)}::jsonb`,
-        sql`${companionStates.moodJson} = ${JSON.stringify(expected.mood)}::jsonb`,
-        sql`${companionStates.drivesJson} = ${JSON.stringify(expected.drives)}::jsonb`,
-        sql`${companionStates.relationshipJson} = ${JSON.stringify(expected.relationship)}::jsonb`,
-        sql`${companionStates.activeArcsJson} = ${JSON.stringify(expected.activeArcs)}::jsonb`,
-      ),
-    )
-    .returning();
-  return rows[0] ?? null;
-}
-
-export async function createStateChange(input: NewStateChange) {
-  const rows = await getDb().insert(stateChanges).values(input).returning();
-  return rows[0];
-}
-
-export async function createToolCall(input: NewToolCall) {
-  const rows = await getDb().insert(toolCalls).values(input).returning();
-  return rows[0];
-}
-
 export async function countTodayToolCalls(companionId: string, timeZone = "Asia/Shanghai") {
   const { start, end } = dayBounds(undefined, timeZone);
   const rows = await getDb()
@@ -801,30 +736,6 @@ export async function updateProactiveLog(
     .where(eq(proactiveLogs.id, id))
     .returning();
   return rows[0] ?? null;
-}
-
-export async function createInternalJournal(input: NewJournal) {
-  const rows = await getDb()
-    .insert(internalJournals)
-    .values(input)
-    .onConflictDoNothing({
-      target: [internalJournals.companionId, internalJournals.date],
-    })
-    .returning();
-  if (rows[0]) return { row: rows[0], created: true };
-
-  const existing = await getDb()
-    .select()
-    .from(internalJournals)
-    .where(
-      and(
-        eq(internalJournals.companionId, input.companionId),
-        eq(internalJournals.date, input.date),
-      ),
-    )
-    .limit(1);
-  if (!existing[0]) throw new Error("Journal insert conflicted but no existing row was found");
-  return { row: existing[0], created: false };
 }
 
 export type DailyReflectionChangeInput = {

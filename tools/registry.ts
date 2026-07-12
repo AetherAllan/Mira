@@ -1,5 +1,4 @@
 import type { JsonValue, ToolRequest } from "@/core/types";
-import { generateFakePhoto } from "@/tools/generateFakePhoto";
 
 export interface ToolExecution {
   ok: boolean;
@@ -31,12 +30,14 @@ export async function executeTool(request: ToolRequest): Promise<ToolExecution> 
     const mood = typeof request.arguments.mood === "string" ? request.arguments.mood.trim() : "";
     const style = typeof request.arguments.style === "string" ? request.arguments.style.trim() : "";
     if (!scene) throw new Error("scene is required");
-    const result = await generateFakePhoto({ scene, mood, style });
     return {
       ok: true,
       toolName: request.name,
       args: request.arguments,
-      result: { type: result.type, description: result.description },
+      result: {
+        type: "mock_image",
+        description: `生成图片描述：${scene}；情绪：${mood || "克制"}；风格：${style || "像记忆，不像广告"}`,
+      },
       error: null,
     };
   } catch (error) {

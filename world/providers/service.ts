@@ -1,8 +1,6 @@
-import { createHash } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import {
   getCachedProviderValue,
-  persistDiscoveredPlaces,
   persistExternalFacts,
   setCachedProviderValue,
   type ExternalFactDraft,
@@ -13,23 +11,14 @@ import { persistExternalThoughtCandidates } from "@/db/externalThoughtRepo";
 import { embedExternalInformation } from "@/world/providers/embedding";
 import { GdeltProvider } from "@/world/providers/gdelt";
 import { OpenMeteoProvider } from "@/world/providers/openMeteo";
-import { NominatimProvider, OsrmProvider } from "@/world/providers/publicGeo";
 import type {
-  PlaceSearchRequest,
   ProviderArticle,
   ProviderCurrentWeather,
-  ProviderPlace,
-  ProviderRoute,
-  RouteRequest,
 } from "@/world/providers/types";
 
 const BEIJING = { longitude: 116.4074, latitude: 39.9042 };
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-
-function cacheKey(value: unknown) {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
 
 async function cached<T>(input: {
   companionId: string;
@@ -56,53 +45,6 @@ async function cached<T>(input: {
     expiresAt: new Date(input.now.getTime() + input.ttlMs),
   });
   return value;
-}
-
-export async function searchBeijingPois(
-  companionId: string,
-  query: PlaceSearchRequest,
-  now = new Date(),
-): Promise<ProviderPlace[]> {
-  return cached({
-    companionId,
-    provider: "nominatim",
-    key: `poi:${cacheKey(query)}`,
-    ttlMs: 7 * 24 * HOUR,
-    now,
-    load: () => new NominatimProvider().searchPlaces(query),
-  }).catch(() => []);
-}
-
-export async function discoverBeijingPlaces(input: {
-  companionId: string;
-  query: PlaceSearchRequest;
-  correlationId: string;
-  now?: Date;
-}) {
-  const now = input.now ?? new Date();
-  const places = await searchBeijingPois(input.companionId, input.query, now);
-  return persistDiscoveredPlaces({
-    companionId: input.companionId,
-    places,
-    discoveredAt: now,
-    correlationId: input.correlationId,
-  });
-}
-
-export async function getBeijingRoute(
-  companionId: string,
-  request: RouteRequest,
-  now = new Date(),
-): Promise<ProviderRoute | null> {
-  if (request.mode === "transit") return null;
-  return cached({
-    companionId,
-    provider: "osrm",
-    key: `route:${cacheKey(request)}`,
-    ttlMs: 30 * MINUTE,
-    now,
-    load: () => new OsrmProvider().getRoute(request),
-  }).catch(() => null);
 }
 
 function weatherDraft(weather: ProviderCurrentWeather, now: Date): ExternalFactDraft {

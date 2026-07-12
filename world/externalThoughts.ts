@@ -1,4 +1,4 @@
-import { clamp01 } from "@/lib/time";
+import { clamp01 } from "@/lib/number";
 import { deterministicUuid } from "@/world/random";
 import type { InnerThought, ShareCandidate } from "@/world/types";
 
@@ -71,4 +71,3 @@ export function buildExternalThoughtAndCandidate(
   };
   return { thought, candidate };
 }
-

@@ -1,4 +1,4 @@
-import { bootstrapCompanion, getRuntimeContext } from "@/db/repo";
+import { ensureCompanionContext, getRuntimeContext } from "@/db/repo";
 
 export type PrimaryRuntimeContext = NonNullable<
   Awaited<ReturnType<typeof getRuntimeContext>>
@@ -9,6 +9,6 @@ export async function getPrimaryRuntimeContext(): Promise<PrimaryRuntimeContext>
   if (!telegramUserId) throw new Error("TELEGRAM_ALLOWED_USER_ID is not configured");
   return (
     (await getRuntimeContext(telegramUserId)) ??
-    (await bootstrapCompanion({ telegramUserId, displayName: "Telegram User" }))
+    (await ensureCompanionContext({ telegramUserId, displayName: "Telegram User" }))
   );
 }

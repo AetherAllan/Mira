@@ -1,4 +1,4 @@
-import type { CompanionState, TopicEntropy } from "@/core/types";
+import type { TopicEntropy } from "@/core/types";
 
 type AnnotationLike = { topicsJson?: unknown; topics?: unknown };
 type MessageLike = { text: string };
@@ -108,23 +108,4 @@ export function isEchoReply(candidate: string, previous: string[]): boolean {
 
 export function computeMirrorIndex(userTopics: string[], proactiveTopics: string[]): number {
   return jaccard(new Set(userTopics), new Set(proactiveTopics));
-}
-
-export function computeProactiveScore(
-  state: CompanionState,
-  random = 0.5,
-  topicEntropy?: TopicEntropy,
-  mirrorIndex = 0,
-): number {
-  const noveltyPressure =
-    (topicEntropy?.collapseRisk ? 0.045 : 0) + (mirrorIndex > 0.8 ? 0.045 : 0);
-  const score =
-    state.traits.initiative * 0.2 +
-    state.drives.curiosity * 0.18 +
-    state.drives.boredom * 0.12 +
-    state.drives.noveltySeeking * 0.14 +
-    state.relationship.closeness * 0.1 +
-    random * 0.26 +
-    noveltyPressure;
-  return Math.min(1, Math.max(0, score));
 }

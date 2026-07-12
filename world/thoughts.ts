@@ -1,4 +1,4 @@
-import { clamp01 } from "@/lib/time";
+import { clamp01 } from "@/lib/number";
 import { createWorldSeed, deterministicUuid } from "@/world/random";
 import type { InnerThought, ShareCandidate, WorldEvent } from "@/world/types";
 

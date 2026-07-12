@@ -1,4 +1,5 @@
 import type { AwaitingReply } from "@/world/types";
+import { clamp01 } from "@/lib/number";
 
 export interface ReplyEmotionImpact {
   disappointmentDelta: number;
@@ -11,10 +12,6 @@ export interface AwaitingReplyEvaluation extends ReplyEmotionImpact {
 }
 
 const HOUR_MS = 60 * 60 * 1000;
-
-function clamp01(value: number) {
-  return Math.min(1, Math.max(0, value));
-}
 
 function consequenceKind(reply: AwaitingReply) {
   if (reply.userCommitment) return "missed_commitment" as const;
