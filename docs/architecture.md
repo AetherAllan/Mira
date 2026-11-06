@@ -60,7 +60,11 @@ Schedule intervals are half-open: `startAt <= now < endAt`. World state is fresh
 
 Weekday/weekend templates provide routine. Open loops and recent facts can propose adjustments; a seeded optional block provides bounded variation. Every change records `source`, `changeReason` and `correlationId`.
 
-When the planning model is unavailable, `world/fallbackPlan.ts` builds the whole day without it. Each event slot and the theme draw from a pool in `world/fallbackPlanContent.ts`, skipping anything used in the last seven plans. `samplingSeed` and the recent plans fully determine the result, and a fallback row stores the seed that chose its content. `bun run simulate:world` runs 30 days on this path with the production candidate rule, so `distinctEventTitles` and `replayDigest` track the content itself.
+When the planning model is unavailable, `world/fallbackPlan.ts` builds the whole day without it. Each event slot and the theme draw from a pool in `world/fallbackPlanContent.ts`, skipping anything used in the last seven plans. `samplingSeed` and the recent plans fully determine the result, and a fallback row stores the seed that chose its content. `bun run simulate:world` runs 30 days on this path with the production candidate and ordinary-event rules, so `distinctEventTitles` and `replayDigest` track the content itself.
+
+## Event density
+
+A day has six to ten physical events. The plan supplies six to eight: four required, plus two to four candidates. Ordinary events add at most two, with no model involved. A 15-minute window holds one event, and only a window that settled no planned event can produce an ordinary one, at a seeded 2.5% chance (0.5% during sleep), which comes to about one a day. Templates used in the last seven days are avoided. An ordinary event never creates a share candidate, and it creates a thought only if the template's value allows one and the day has fewer than three thoughts.
 
 Provider calls are never made inside a database transaction.
 

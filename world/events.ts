@@ -25,11 +25,19 @@ export interface OrdinaryEventDraft {
 /** How long a used template stays out of rotation while another one is free. */
 const ORDINARY_TEMPLATE_COOLDOWN_MS = 7 * 24 * 60 * 60_000;
 const ORDINARY_TEMPLATE_CAUSE_PREFIX = "ordinary:template:";
+/** History a caller must load for the daily cap and the cooldown to hold. */
+export const ORDINARY_EVENT_LOOKBACK_MS = ORDINARY_TEMPLATE_COOLDOWN_MS;
+
+/** Chance per 15-minute window, about one event a day while awake. */
+const ORDINARY_EVENT_CHANCE = 0.025;
+/** Sleep spans about 38 windows, so the waking rate would fill the daily cap overnight. */
+const ORDINARY_SLEEP_EVENT_CHANCE = 0.005;
 
 export interface GenerateOrdinaryEventInput {
   companionId: string;
   occurredAt: Date;
-  locationId: string;
+  /** Optional only for a commute, which happens between places. */
+  locationId?: string;
   scheduleType?: ScheduleBlockType;
   correlationId: string;
   seed: string;
@@ -82,19 +90,22 @@ export function generateOrdinaryWorldEvent(
   input: GenerateOrdinaryEventInput,
 ): WorldEvent | null {
   if (!Number.isFinite(input.occurredAt.getTime())) throw new Error("Ordinary event time is invalid");
-  if (!input.locationId.trim()) throw new Error("Ordinary physical event needs a location");
-  const chance = input.eventChance ?? 0.025;
+  if (!input.locationId?.trim() && input.scheduleType !== "commute") {
+    throw new Error("Ordinary physical event needs a location");
+  }
+  const chance = input.eventChance ?? ORDINARY_EVENT_CHANCE;
   if (!Number.isFinite(chance) || chance < 0 || chance > 1) {
     throw new Error("Ordinary event chance must be between 0 and 1");
   }
 
+  // Roll first: nearly every window stops here, before any calendar conversion.
+  const random = createSeededRandom(input.seed);
+  if (random() >= chance) return null;
   const dateKey = zonedDateKey(input.occurredAt);
   const today = input.existingEvents.filter(
     (event) => isOrdinaryEvent(event) && zonedDateKey(event.occurredAt) === dateKey,
   );
   if (today.length >= 2) return null;
-  const random = createSeededRandom(input.seed);
-  if (random() >= chance) return null;
 
   const nonTemplate = input.nonTemplateDraft;
   if (nonTemplate && today.some((event) => event.causeId === "ordinary:non-template")) {
@@ -133,6 +144,35 @@ export function generateOrdinaryWorldEvent(
     sharePotential: Math.min(0.7, clamp01(draft.sharePotential)),
     randomSeed: input.seed,
   };
+}
+
+/**
+ * The tick's chance of an ordinary event during `block`. The world tick and the
+ * simulation both call this, so the simulated rate is the production rate.
+ */
+export function ordinaryEventForBlock(input: {
+  companionId: string;
+  block: Pick<ScheduleBlock, "type" | "locationId" | "status" | "source"> | undefined;
+  occurredAt: Date;
+  correlationId: string;
+  tickSeed: string;
+  existingEvents: readonly WorldEvent[];
+}): WorldEvent | null {
+  const { block } = input;
+  if (!block || block.status === "cancelled") return null;
+  if (!block.locationId && block.type !== "commute") return null;
+  // Weather moves an outdoor block indoors without changing its type.
+  const movedIndoors = block.type === "exploration" && block.source === "external_information";
+  return generateOrdinaryWorldEvent({
+    companionId: input.companionId,
+    occurredAt: input.occurredAt,
+    locationId: block.locationId,
+    scheduleType: movedIndoors ? "leisure" : block.type,
+    correlationId: input.correlationId,
+    seed: createWorldSeed(input.tickSeed, "ordinary-event"),
+    existingEvents: input.existingEvents,
+    eventChance: block.type === "sleep" ? ORDINARY_SLEEP_EVENT_CHANCE : ORDINARY_EVENT_CHANCE,
+  });
 }
 
 export interface PhysicalWorldEventValidationInput {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   generateOrdinaryWorldEvent,
+  ordinaryEventForBlock,
   validatePhysicalWorldEvent,
   type OrdinaryEventDraft,
 } from "@/world/events";
@@ -165,6 +166,93 @@ test("recent-template avoidance stays deterministic and idempotent on replay", (
   // Events that happened later cannot change what this tick originally chose.
   const later = { ...history[0]!, occurredAt: new Date(Date.UTC(2026, 6, 25)), randomSeed: "later" };
   assert.deepEqual(generate([...history, later]), first);
+});
+
+test("only a commute may happen without a place", () => {
+  const input = {
+    companionId: "mira",
+    occurredAt,
+    correlationId: "00000000-0000-4000-8000-000000000001",
+    seed: "no-place",
+    existingEvents: [],
+    eventChance: 1,
+  };
+  const commute = generateOrdinaryWorldEvent({ ...input, scheduleType: "commute" });
+  assert.ok(commute);
+  assert.equal(commute.locationId, undefined);
+  assert.throws(() => generateOrdinaryWorldEvent({ ...input, scheduleType: "work" }), /needs a location/);
+  assert.throws(() => generateOrdinaryWorldEvent({ ...input, scheduleType: "work", locationId: " " }), /needs a location/);
+});
+
+function blockOutcomes(block: Parameters<typeof ordinaryEventForBlock>[0]["block"], windows = 4000) {
+  return Array.from({ length: windows }, (_, index) => ordinaryEventForBlock({
+    companionId: "mira",
+    block,
+    occurredAt,
+    correlationId: "00000000-0000-4000-8000-000000000001",
+    tickSeed: `tick-${index}`,
+    existingEvents: [],
+  })).filter((event) => event !== null);
+}
+
+test("a window's chance of an ordinary event depends on the active block", () => {
+  const awake = blockOutcomes({ type: "work", locationId: "studio", status: "active", source: "routine" }).length / 4000;
+  const asleep = blockOutcomes({ type: "sleep", locationId: "home", status: "active", source: "routine" }).length / 4000;
+  assert.ok(awake > 0.015 && awake < 0.035, `awake rate ${awake}`);
+  assert.ok(asleep > 0.001 && asleep < 0.012, `sleep rate ${asleep}`);
+  assert.ok(asleep * 2 < awake);
+});
+
+test("ordinary events keep to blocks that can ground them", () => {
+  assert.equal(blockOutcomes(undefined).length, 0);
+  assert.equal(blockOutcomes({ type: "work", locationId: "studio", status: "cancelled", source: "routine" }).length, 0);
+  assert.equal(blockOutcomes({ type: "leisure", locationId: undefined, status: "active", source: "routine" }).length, 0);
+  const commutes = blockOutcomes({ type: "commute", locationId: undefined, status: "active", source: "routine" });
+  assert.ok(commutes.length > 0);
+  assert.ok(commutes.every((event) => event.type === "travel" && event.locationId === undefined));
+  const asleep = blockOutcomes({ type: "sleep", locationId: "home", status: "active", source: "routine" }, 8000);
+  assert.ok(asleep.every((event) => event.causeId?.startsWith("ordinary:template:sleep_")));
+});
+
+test("a block the weather moved indoors no longer draws outdoor templates", () => {
+  const outdoors = blockOutcomes({ type: "exploration", locationId: "park", status: "active", source: "routine" });
+  assert.ok(outdoors.some((event) => event.causeId?.startsWith("ordinary:template:street_")));
+  const moved = blockOutcomes({ type: "exploration", locationId: "library", status: "active", source: "external_information" });
+  assert.ok(moved.length > 0);
+  assert.equal(moved.filter((event) => event.causeId?.startsWith("ordinary:template:street_")).length, 0);
+});
+
+test("sleep templates suit every hour of the sleep block", () => {
+  const sleep = ORDINARY_EVENT_TEMPLATES.filter((template) => template.scheduleTypes.includes("sleep"));
+  assert.ok(sleep.length > 0);
+  for (const template of sleep) {
+    assert.doesNotMatch(`${template.title}${template.description}`, /半夜|深夜|凌晨|摸黑/, template.id);
+  }
+});
+
+test("a window replays to the same ordinary event", () => {
+  const block = { type: "work", locationId: "studio", status: "active", source: "routine" } as const;
+  const [first] = blockOutcomes(block);
+  assert.ok(first);
+  const tickSeed = Array.from({ length: 4000 }, (_, index) => `tick-${index}`).find((seed) =>
+    ordinaryEventForBlock({
+      companionId: "mira",
+      block,
+      occurredAt,
+      correlationId: "00000000-0000-4000-8000-000000000001",
+      tickSeed: seed,
+      existingEvents: [],
+    }));
+  const replay = () => ordinaryEventForBlock({
+    companionId: "mira",
+    block,
+    occurredAt,
+    correlationId: "00000000-0000-4000-8000-000000000001",
+    tickSeed: tickSeed!,
+    existingEvents: [],
+  });
+  assert.deepEqual(replay(), first);
+  assert.deepEqual(replay(), replay());
 });
 
 test("templates exist for every schedule type and keep their ids unique", () => {

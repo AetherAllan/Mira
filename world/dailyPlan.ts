@@ -736,6 +736,15 @@ export function plannedEventRowToDomain(row: typeof plannedWorldEvents.$inferSel
   };
 }
 
+export async function countThoughtsOnLocalDate(companionId: string, localDate: string) {
+  const rows = await getDb().select({ id: innerThoughts.id }).from(innerThoughts).where(and(
+    eq(innerThoughts.companionId, companionId),
+    gte(innerThoughts.createdAt, localMinute(localDate, 0)),
+    lt(innerThoughts.createdAt, localMinute(addLocalDays(localDate, 1), 0)),
+  ));
+  return rows.length;
+}
+
 export async function selectPlannedEventForTick(input: {
   companionId: string;
   occurredAt: Date;
@@ -788,12 +797,7 @@ export async function selectPlannedEventForTick(input: {
       createThought: false,
     };
   }
-  const thoughtRows = await db.select({ id: innerThoughts.id }).from(innerThoughts).where(and(
-    eq(innerThoughts.companionId, input.companionId),
-    gte(innerThoughts.createdAt, localMinute(localDate, 0)),
-    lt(innerThoughts.createdAt, localMinute(addLocalDays(localDate, 1), 0)),
-  ));
-  const thoughtCount = thoughtRows.length;
+  const thoughtCount = await countThoughtsOnLocalDate(input.companionId, localDate);
   const createThought = thoughtCount < 3 || (
     thoughtCount < 5 && createSeededRandom(createWorldSeed(event.id, "thought-selection"))() < 0.55
   );

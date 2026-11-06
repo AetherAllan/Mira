@@ -4,6 +4,7 @@ import {
   ensurePersistentWorld,
   failWorldTickRun,
   getWorldState,
+  listRecentPhysicalWorldEvents,
   listScheduleBlocksForDate,
   listWorldCompanions,
   worldStateRowToDomain,
@@ -24,7 +25,12 @@ import type { CharacterProfile } from "@/core/types";
 import type { KnownPlaceRow, WorldStateRow } from "@/db/schema";
 import type { PlannedWorldEvent, ScheduleBlock, WorldEvent } from "@/world/types";
 import { activeIntervalAt } from "@/platform/time";
-import { generateDailyLifePlan, selectPlannedEventForTick } from "@/world/dailyPlan";
+import {
+  countThoughtsOnLocalDate,
+  generateDailyLifePlan,
+  selectPlannedEventForTick,
+} from "@/world/dailyPlan";
+import { ORDINARY_EVENT_LOOKBACK_MS, ordinaryEventForBlock } from "@/world/events";
 import {
   applyWorldEventToCompanionState,
   reduceCompanionStateForTime,
@@ -102,6 +108,38 @@ function materializePlannedEvent(
     sharePotential: planned.sharePotential,
     randomSeed: planned.idempotencyKey,
   };
+}
+
+// Thoughts are capped per day and a planned event's narrative is the richer one.
+// A small detail may only take a slot while the day still has room to spare.
+const ORDINARY_THOUGHT_DAILY_LIMIT = 3;
+
+async function selectOrdinaryEventForWindow(input: {
+  companionId: string;
+  block: ScheduleBlock | undefined;
+  occurredAt: Date;
+  correlationId: string;
+  tickSeed: string;
+  timeZone: string;
+}) {
+  const event = ordinaryEventForBlock({
+    companionId: input.companionId,
+    block: input.block,
+    occurredAt: input.occurredAt,
+    correlationId: input.correlationId,
+    tickSeed: input.tickSeed,
+    existingEvents: await listRecentPhysicalWorldEvents(
+      input.companionId,
+      new Date(input.occurredAt.getTime() - ORDINARY_EVENT_LOOKBACK_MS),
+      200,
+    ),
+  });
+  if (!event) return null;
+  const thoughtCount = await countThoughtsOnLocalDate(
+    input.companionId,
+    zonedDateKey(input.occurredAt, input.timeZone),
+  );
+  return { event, createThought: thoughtCount < ORDINARY_THOUGHT_DAILY_LIMIT };
 }
 
 async function runAggregateCatchUp(input: {
@@ -282,9 +320,21 @@ async function runCompanionTick(
         mood: timePsychology.state.mood,
         drives: timePsychology.state.drives,
       });
+      // One event per window. A window that settled a planned event, whichever
+      // way it went, stays closed: the commit would tie an ordinary event to it.
+      const ordinary = decision
+        ? null
+        : await selectOrdinaryEventForWindow({
+            companionId: companion.id,
+            block: active,
+            occurredAt: windowEnd,
+            correlationId: claim.correlationId,
+            tickSeed: randomSeed,
+            timeZone: profile.timeZone,
+          });
       const worldEvent = decision?.event.status === "selected"
         ? materializePlannedEvent(decision.event, windowEnd, claim.correlationId)
-        : null;
+        : ordinary?.event ?? null;
       let companionState = timePsychology.state;
       const companionStateChanges = [...timePsychology.changes];
       if (worldEvent) {
@@ -303,7 +353,7 @@ async function runCompanionTick(
         mode: "detailed",
         worldEvent,
         plannedEvent: decision?.event,
-        createThought: decision?.createThought,
+        createThought: decision ? decision.createThought : ordinary?.createThought,
       });
       processedWindows += 1;
     } catch (error) {

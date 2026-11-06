@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { closeDb, getDb } from "@/db/client";
 import {
   awaitingReplies,
+  companionStates,
   companions,
   externalInformation,
   internalJournals,
@@ -101,6 +102,16 @@ test(
         .values({ userId: user.id, name: "Mira", configJson: DEFAULT_RUNTIME_CONFIG })
         .returning();
       assert.ok(companion);
+      await db.insert(companionStates).values({
+        companionId: companion.id,
+        traitsJson: INITIAL_STATE.traits,
+        moodJson: INITIAL_STATE.mood,
+        drivesJson: INITIAL_STATE.drives,
+        relationshipJson: INITIAL_STATE.relationship,
+        activeArcsJson: INITIAL_STATE.activeArcs,
+        stateReasonsJson: INITIAL_STATE.stateReasons,
+        version: INITIAL_STATE.version,
+      });
       const persistentWorld = await ensurePersistentWorld(
         companion.id,
         DEFAULT_RUNTIME_CONFIG.character.profile,

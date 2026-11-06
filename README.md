@@ -209,7 +209,7 @@ bun run simulate:world
 
 它使用固定周五北京时间和 seed，验证：工作日计划、降雨改去室内地点、普通事件、InnerThought、ShareCandidate、fake Telegram、用户地点推荐，以及重要问题未回复后的有限 disappointment 和渐进恢复。
 
-`simulate:world` 额外重放 14 天 / 1344 个 tick，输出日程一致性、每天普通事件密度、分享候选可达性、情绪范围和 replay digest；同一 seed 的结果必须完全一致。
+`simulate:world` 额外重放 30 天 / 2880 个 tick（规划模型全程不可用），输出日程一致性、每天事件密度（6 到 10 个）、不同事件标题数、分享候选可达性、情绪范围和 replay digest；同一 seed 的结果必须完全一致。
 
 手动 runtime：
 

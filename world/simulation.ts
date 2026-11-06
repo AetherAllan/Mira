@@ -6,6 +6,7 @@ import { activeIntervalAt } from "@/platform/time";
 import { applyWorldEventToCompanionState, reduceCompanionStateForTime } from "@/psyche/stateReducer";
 import type { CompanionState } from "@/core/types";
 import type { GeneratedEvent } from "@/world/dailyPlan";
+import { ordinaryEventForBlock } from "@/world/events";
 import { fallbackPlan } from "@/world/fallbackPlan";
 import { decidePlannedCandidate, localMinute } from "@/world/planner";
 import { createSeededRandom, createWorldSeed, deterministicUuid } from "@/world/random";
@@ -21,8 +22,11 @@ export interface WorldSimulationMetrics {
   scheduleDays: number;
   scheduleConsistencyFailures: number;
   eventCount: number;
-  ordinaryEventsPerDay: Record<string, number>;
-  ordinaryDensityViolations: number;
+  eventsPerDay: Record<string, number>;
+  /** Days outside six to ten events: six to eight planned, at most two ordinary. */
+  densityViolations: number;
+  ordinaryEventCount: number;
+  maxOrdinaryEventsPerDay: number;
   distinctEventTitles: number;
   shareCandidateCount: number;
   eligibleShareCandidateCount: number;
@@ -32,6 +36,8 @@ export interface WorldSimulationMetrics {
 }
 
 const TICK_MS = 15 * 60_000;
+const MIN_DAILY_EVENTS = 6;
+const MAX_DAILY_EVENTS = 10;
 
 function runtimeState(at: Date): WorldState {
   return {
@@ -86,8 +92,12 @@ function plannedEventsFor(localDate: string, events: readonly GeneratedEvent[]) 
     .sort((left, right) => left.windowStart.getTime() - right.windowStart.getTime());
 }
 
-/** The in-memory counterpart of `selectPlannedEventForTick`, which reads the database. */
-function selectDueEvent(day: SimulatedDay, at: Date, psyche: CompanionState) {
+/**
+ * The in-memory counterpart of `selectPlannedEventForTick`, which reads the
+ * database. Null means nothing was due, leaving the window open to an ordinary
+ * event; `occurred: null` means a due candidate was skipped.
+ */
+function settleDueEvent(day: SimulatedDay, at: Date, psyche: CompanionState) {
   const rows = day.planned.filter((row) => row.status === "planned" && row.windowStart <= at);
   const due = rows.find((row) => row.windowEnd > at) ?? rows.find((row) => row.event.slot === "required");
   if (!due) return null;
@@ -105,11 +115,11 @@ function selectDueEvent(day: SimulatedDay, at: Date, psyche: CompanionState) {
     });
     if (!selected) {
       due.status = "skipped";
-      return null;
+      return { occurred: null };
     }
   }
   due.status = "occurred";
-  return due;
+  return { occurred: due };
 }
 
 function materializeEvent(planned: SimulatedPlannedEvent, seed: string, at: Date): WorldEvent {
@@ -138,8 +148,9 @@ function materializeEvent(planned: SimulatedPlannedEvent, seed: string, at: Date
 }
 
 /**
- * Thirty days with the planning model down: every day runs on `fallbackPlan`
- * and the real selection rule, so density and variety are measured, not assumed.
+ * Thirty days with the planning model down: every day runs on `fallbackPlan`,
+ * the real selection rule and the real ordinary-event rule, so density and
+ * variety are measured, not assumed.
  */
 export function simulateWorld(input: { days?: number; seed?: string } = {}): WorldSimulationMetrics {
   const days = Math.max(7, Math.min(30, input.days ?? 30));
@@ -154,6 +165,7 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
   let previousWeekendMode: WeekendMode | null = null;
   const events: WorldEvent[] = [];
   const eventsPerDay: Record<string, number> = {};
+  const ordinaryPerDay: Record<string, number> = {};
   const affectRange: WorldSimulationMetrics["affectRange"] = {
     energy: { min: psyche.mood.energy, max: psyche.mood.energy },
     boredom: { min: psyche.mood.boredom, max: psyche.mood.boredom },
@@ -207,13 +219,26 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
       correlationId: deterministicUuid(`${seed}:${windowStart.toISOString()}`),
     }).state;
 
-    const planned = selectDueEvent(planDays.get(localDate)!, windowEnd, psyche);
-    if (planned) {
-      const event = materializeEvent(planned, seed, windowEnd);
+    const settled = settleDueEvent(planDays.get(localDate)!, windowEnd, psyche);
+    const planned = settled?.occurred;
+    const event = planned
+      ? materializeEvent(planned, seed, windowEnd)
+      : settled
+        ? null
+        : ordinaryEventForBlock({
+            companionId: world.companionId,
+            block: active,
+            occurredAt: windowEnd,
+            correlationId: deterministicUuid(`${seed}:${windowStart.toISOString()}:ordinary`),
+            tickSeed: createWorldSeed(seed, windowStart.toISOString(), "tick"),
+            existingEvents: events,
+          });
+    if (event) {
       events.push(event);
       eventsPerDay[localDate] = (eventsPerDay[localDate] ?? 0) + 1;
+      if (!planned) ordinaryPerDay[localDate] = (ordinaryPerDay[localDate] ?? 0) + 1;
       psyche = applyWorldEventToCompanionState(psyche, event).state;
-      const bundle = buildThoughtAndShareCandidate(event, planned.event.innerNarrative);
+      const bundle = buildThoughtAndShareCandidate(event, planned?.event.innerNarrative);
       if (bundle?.candidate) {
         shareCandidateCount += 1;
         const evaluation = scoreShareCandidate(bundle.candidate, {
@@ -255,8 +280,11 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
     scheduleDays: schedules.size,
     scheduleConsistencyFailures,
     eventCount: events.length,
-    ordinaryEventsPerDay: eventsPerDay,
-    ordinaryDensityViolations: Object.values(eventsPerDay).filter((count) => count < 6 || count > 8).length,
+    eventsPerDay,
+    densityViolations: Object.values(eventsPerDay)
+      .filter((count) => count < MIN_DAILY_EVENTS || count > MAX_DAILY_EVENTS).length,
+    ordinaryEventCount: Object.values(ordinaryPerDay).reduce((sum, count) => sum + count, 0),
+    maxOrdinaryEventsPerDay: Math.max(0, ...Object.values(ordinaryPerDay)),
     distinctEventTitles: new Set(events.map((event) => event.title)).size,
     shareCandidateCount,
     eligibleShareCandidateCount,
