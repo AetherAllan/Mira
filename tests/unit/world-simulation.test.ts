@@ -20,3 +20,18 @@ test("thirty-day fixed-seed world simulation is stable and keeps six to eight da
     assert.ok(range.max <= 1);
   }
 });
+
+test("thirty days without the planning model still vary what happens", () => {
+  const first = simulateWorld({ days: 30, seed: "variety-30d" });
+  // The previous fallback content reached 15 distinct titles over the same run.
+  assert.ok(first.distinctEventTitles >= 90, `only ${first.distinctEventTitles} distinct titles`);
+  // Every day's two major events stay eligible to be shared.
+  assert.equal(first.shareCandidateCount, 60);
+  assert.equal(first.eligibleShareCandidateCount, first.shareCandidateCount);
+});
+
+test("the replay digest covers content and depends on the seed", () => {
+  const first = simulateWorld({ days: 7, seed: "digest-a" });
+  assert.equal(simulateWorld({ days: 7, seed: "digest-a" }).replayDigest, first.replayDigest);
+  assert.notEqual(simulateWorld({ days: 7, seed: "digest-b" }).replayDigest, first.replayDigest);
+});

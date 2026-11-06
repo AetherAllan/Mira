@@ -1,14 +1,19 @@
 import { createHash } from "node:crypto";
 import { INITIAL_STATE } from "@/seed/character";
+import { INITIAL_WORLD_CHARACTERS } from "@/seed/world";
 import { zonedDateKey, zonedMinutes } from "@/lib/time";
 import { activeIntervalAt } from "@/platform/time";
 import { applyWorldEventToCompanionState, reduceCompanionStateForTime } from "@/psyche/stateReducer";
-import { buildDailySchedule } from "@/world/planner";
+import type { CompanionState } from "@/core/types";
+import type { GeneratedEvent } from "@/world/dailyPlan";
+import { fallbackPlan } from "@/world/fallbackPlan";
+import { decidePlannedCandidate, localMinute } from "@/world/planner";
 import { createSeededRandom, createWorldSeed, deterministicUuid } from "@/world/random";
 import { reduceWorldTick } from "@/world/reducer";
 import { scoreShareCandidate } from "@/world/share";
 import { buildThoughtAndShareCandidate } from "@/world/thoughts";
-import type { ScheduleBlock, WorldEvent, WorldState } from "@/world/types";
+import type { ScheduleBlock, WeekendMode, WorldEvent, WorldState } from "@/world/types";
+import { resolveWorkday } from "@/world/workCalendar";
 
 export interface WorldSimulationMetrics {
   days: number;
@@ -18,6 +23,7 @@ export interface WorldSimulationMetrics {
   eventCount: number;
   ordinaryEventsPerDay: Record<string, number>;
   ordinaryDensityViolations: number;
+  distinctEventTitles: number;
   shareCandidateCount: number;
   eligibleShareCandidateCount: number;
   maxShareScore: number;
@@ -37,48 +43,104 @@ function runtimeState(at: Date): WorldState {
   };
 }
 
-function eventSlots(seed: string, localDate: string) {
-  const random = createSeededRandom(createWorldSeed(seed, localDate, "daily-event-count"));
-  const slots = [510, 660, 780, 960, 1140, 1290];
-  if (random() < 0.72) slots.push(600);
-  if (random() < 0.48) slots.push(1230);
-  return slots.sort((a, b) => a - b);
+interface SimulatedPlannedEvent {
+  key: string;
+  id: string;
+  event: GeneratedEvent;
+  windowStart: Date;
+  windowEnd: Date;
+  status: "planned" | "occurred" | "skipped";
 }
 
-function simulatedEvent(input: {
-  seed: string;
-  localDate: string;
-  minute: number;
-  index: number;
-  at: Date;
-  active?: ScheduleBlock;
-}): WorldEvent {
-  const idempotencyKey = createWorldSeed(input.seed, input.localDate, String(input.index), "planned-event");
-  const major = input.index < 2;
-  const social = input.index === 1 || input.index === 4;
+interface SimulatedDay {
+  samplingSeed: number;
+  planned: SimulatedPlannedEvent[];
+}
+
+/** The same rule `generateDailyLifePlan` applies when it reads Saturday's plan. */
+function weekendModeFor(
+  seed: string,
+  localDate: string,
+  saturdayMode: WeekendMode | null,
+): WeekendMode | null {
+  const weekday = new Date(`${localDate}T12:00:00+08:00`).getUTCDay();
+  if (resolveWorkday(localDate).dayType !== "restday") return null;
+  if (weekday === 0) return saturdayMode === "outing" ? "flexible" : "outing";
+  if (weekday !== 6) return null;
+  return createSeededRandom(createWorldSeed(seed, localDate, "weekend-mode"))() < 0.5 ? "outing" : "flexible";
+}
+
+function plannedEventsFor(localDate: string, events: readonly GeneratedEvent[]) {
+  return events
+    .map((event, index): SimulatedPlannedEvent => {
+      const key = `simulation-mira:planned:${localDate}:${index}`;
+      return {
+        key,
+        id: deterministicUuid(key),
+        event,
+        windowStart: localMinute(localDate, event.startMinute),
+        windowEnd: localMinute(localDate, event.endMinute),
+        status: "planned",
+      };
+    })
+    .sort((left, right) => left.windowStart.getTime() - right.windowStart.getTime());
+}
+
+/** The in-memory counterpart of `selectPlannedEventForTick`, which reads the database. */
+function selectDueEvent(day: SimulatedDay, at: Date, psyche: CompanionState) {
+  const rows = day.planned.filter((row) => row.status === "planned" && row.windowStart <= at);
+  const due = rows.find((row) => row.windowEnd > at) ?? rows.find((row) => row.event.slot === "required");
+  if (!due) return null;
+  if (due.event.slot === "candidate") {
+    const candidates = day.planned.filter((row) => row.event.slot === "candidate");
+    const { selected } = decidePlannedCandidate({
+      samplingSeed: day.samplingSeed,
+      eventId: due.id,
+      weight: due.event.weight,
+      occurred: candidates.filter((row) => row.status === "occurred").length,
+      remaining: candidates.filter((row) => row.status === "planned").length,
+      noveltySeeking: psyche.drives.noveltySeeking,
+      boredom: psyche.mood.boredom,
+      localHour: Math.floor(zonedMinutes(at) / 60),
+    });
+    if (!selected) {
+      due.status = "skipped";
+      return null;
+    }
+  }
+  due.status = "occurred";
+  return due;
+}
+
+function materializeEvent(planned: SimulatedPlannedEvent, seed: string, at: Date): WorldEvent {
+  const { event } = planned;
+  const idempotencyKey = `planned-event:${planned.key}`;
   return {
     id: deterministicUuid(idempotencyKey),
     companionId: "simulation-mira",
     realityLayer: "physical",
     idempotencyKey,
-    correlationId: deterministicUuid(`${idempotencyKey}:correlation`),
-    characterIds: social ? [input.index === 1 ? "lin_xia" : "tang_rui"] : [],
-    type: input.active?.type === "work" ? "work" : social ? "social" : "routine",
-    title: major ? `推进今天的重要事件 ${input.index + 1}` : `生活切片 ${input.index + 1}`,
-    description: major ? "这件事改变了后续判断，并留下一个需要继续处理的问题。" : "一件具体的小事让这一天不只是时间表。",
-    occurredAt: input.at,
-    locationId: input.active?.locationId,
-    causeType: social ? "character_interaction" : "schedule",
-    emotionalImpact: major
-      ? { valence: 0.05, curiosity: 0.04, shareDesire: 0.12 }
-      : { valence: 0.01, boredom: -0.02 },
-    consequences: [major ? "后续计划因此调整" : "留下一个具体生活印象"],
-    importance: major ? 0.75 : 0.3,
-    sharePotential: major ? 0.75 : input.index < 4 ? 0.4 : 0.2,
-    randomSeed: input.seed,
+    correlationId: deterministicUuid(`${seed}:${idempotencyKey}:correlation`),
+    characterIds: event.characterKeys,
+    type: event.eventType,
+    title: event.title,
+    description: event.description,
+    occurredAt: at,
+    locationId: event.placeKey === "transit" ? undefined : event.placeKey,
+    causeType: event.characterKeys.length ? "character_interaction" : "schedule",
+    causeId: planned.id,
+    emotionalImpact: Object.fromEntries(event.impacts.map((impact) => [impact.dimension, impact.delta])),
+    consequences: event.consequences,
+    importance: event.importance,
+    sharePotential: event.sharePotential,
+    randomSeed: planned.key,
   };
 }
 
+/**
+ * Thirty days with the planning model down: every day runs on `fallbackPlan`
+ * and the real selection rule, so density and variety are measured, not assumed.
+ */
 export function simulateWorld(input: { days?: number; seed?: string } = {}): WorldSimulationMetrics {
   const days = Math.max(7, Math.min(30, input.days ?? 30));
   const seed = input.seed ?? "mira-world-v3-regression";
@@ -87,6 +149,9 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
   let world = runtimeState(startedAt);
   let psyche = structuredClone(INITIAL_STATE);
   const schedules = new Map<string, ScheduleBlock[]>();
+  const planDays = new Map<string, SimulatedDay>();
+  const recentPlans: Array<{ theme: string; fingerprintJson: string[] }> = [];
+  let previousWeekendMode: WeekendMode | null = null;
   const events: WorldEvent[] = [];
   const eventsPerDay: Record<string, number> = {};
   const affectRange: WorldSimulationMetrics["affectRange"] = {
@@ -107,14 +172,26 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
     const localDate = zonedDateKey(windowStart);
     let schedule = schedules.get(localDate);
     if (!schedule) {
-      schedule = buildDailySchedule({
+      const samplingSeed = Number.parseInt(createWorldSeed(seed, localDate, "sampling-seed").slice(0, 8), 16) % 2_147_483_646 + 1;
+      const weekendMode = weekendModeFor(seed, localDate, previousWeekendMode);
+      previousWeekendMode = weekendMode;
+      const plan = fallbackPlan({
         companionId: world.companionId,
-        date: windowStart,
-        homeLocationId: "home",
-        workLocationId: "work",
-        optionalLocationId: "optional",
-        seed: createWorldSeed(seed, localDate, "schedule"),
+        localDate,
+        dayType: resolveWorkday(localDate).dayType,
+        weekendMode,
+        homePlaceId: "home",
+        workPlaceId: "work",
+        optionalPlaceId: "optional",
+        characters: INITIAL_WORLD_CHARACTERS,
+        correlationId: deterministicUuid(`${seed}:${localDate}:plan`),
+        samplingSeed,
+        recentPlans,
       });
+      recentPlans.unshift({ theme: plan.generated.theme, fingerprintJson: plan.fingerprints });
+      recentPlans.length = Math.min(recentPlans.length, 14);
+      planDays.set(localDate, { samplingSeed, planned: plannedEventsFor(localDate, plan.generated.events) });
+      schedule = plan.schedule;
       schedules.set(localDate, schedule);
     }
     const reduced = reduceWorldTick({ state: world, schedule, windowStart, windowEnd });
@@ -130,15 +207,13 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
       correlationId: deterministicUuid(`${seed}:${windowStart.toISOString()}`),
     }).state;
 
-    const minute = zonedMinutes(windowEnd);
-    const slots = eventSlots(seed, localDate);
-    const index = slots.indexOf(minute);
-    if (index >= 0) {
-      const event = simulatedEvent({ seed, localDate, minute, index, at: windowEnd, active });
+    const planned = selectDueEvent(planDays.get(localDate)!, windowEnd, psyche);
+    if (planned) {
+      const event = materializeEvent(planned, seed, windowEnd);
       events.push(event);
       eventsPerDay[localDate] = (eventsPerDay[localDate] ?? 0) + 1;
       psyche = applyWorldEventToCompanionState(psyche, event).state;
-      const bundle = buildThoughtAndShareCandidate(event, `我对“${event.title}”形成了一个不依赖用户话题的具体判断。`);
+      const bundle = buildThoughtAndShareCandidate(event, planned.event.innerNarrative);
       if (bundle?.candidate) {
         shareCandidateCount += 1;
         const evaluation = scoreShareCandidate(bundle.candidate, {
@@ -171,6 +246,7 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
   const trace = {
     finalState: { mood: psyche.mood, drives: psyche.drives },
     eventIds: events.map((event) => event.id),
+    eventTitles: events.map((event) => event.title),
     scheduleIds: [...schedules.values()].flatMap((schedule) => schedule.map((block) => block.id)),
   };
   return {
@@ -181,6 +257,7 @@ export function simulateWorld(input: { days?: number; seed?: string } = {}): Wor
     eventCount: events.length,
     ordinaryEventsPerDay: eventsPerDay,
     ordinaryDensityViolations: Object.values(eventsPerDay).filter((count) => count < 6 || count > 8).length,
+    distinctEventTitles: new Set(events.map((event) => event.title)).size,
     shareCandidateCount,
     eligibleShareCandidateCount,
     maxShareScore,

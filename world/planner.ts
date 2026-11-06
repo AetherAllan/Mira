@@ -1,4 +1,4 @@
-import { createWorldSeed, seededChoice } from "@/world/random";
+import { createSeededRandom, createWorldSeed, seededChoice } from "@/world/random";
 import { isWeekendLocalDate, localDateAt } from "@/platform/time";
 import {
   WORLD_TIME_ZONE,
@@ -71,6 +71,11 @@ function getLocalDay(date: Date): LocalDay {
 // Beijing has no daylight-saving transition, so local wall time is always UTC+8.
 function localMinuteToDate(day: LocalDay, minute: number) {
   return new Date(Date.UTC(day.year, day.month - 1, day.day, 0, minute) - 8 * 60 * 60 * 1000);
+}
+
+export function localMinute(localDate: string, minute: number) {
+  const [year, month, day] = localDate.split("-").map(Number);
+  return localMinuteToDate({ key: localDate, year: year!, month: month!, day: day! }, minute);
 }
 
 function optionalBlock(
@@ -282,4 +287,31 @@ export function cancelScheduleBlock(
   });
   if (!found) throw new Error(`Schedule block not found: ${blockId}`);
   return next;
+}
+
+/**
+ * Whether a due candidate event happens. Required events always do, so together
+ * with this floor of two and cap of four a plan yields six to eight events a day.
+ */
+export function decidePlannedCandidate(input: {
+  samplingSeed: number;
+  eventId: string;
+  weight: number;
+  occurred: number;
+  remaining: number;
+  noveltySeeking: number;
+  boredom: number;
+  localHour: number;
+}) {
+  const needed = Math.max(0, 2 - input.occurred);
+  const force = input.remaining <= needed;
+  const probability = Math.min(
+    0.92,
+    0.18 + input.weight * 0.4 + input.noveltySeeking * 0.22 +
+      input.boredom * 0.12 + (input.localHour >= 18 ? 0.12 : 0),
+  );
+  const selected = input.occurred < 4 && (force || createSeededRandom(createWorldSeed(
+    String(input.samplingSeed), input.eventId, "candidate-selection",
+  ))() < probability);
+  return { selected, force, probability };
 }

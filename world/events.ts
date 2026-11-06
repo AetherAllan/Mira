@@ -1,5 +1,6 @@
 import { clamp01 } from "@/lib/number";
 import { zonedDateKey } from "@/lib/time";
+import { ORDINARY_EVENT_TEMPLATES, type OrdinaryEventTemplate } from "@/world/ordinaryEventTemplates";
 import { createSeededRandom, createWorldSeed, deterministicUuid } from "@/world/random";
 import type {
   ScheduleBlock,
@@ -21,68 +22,9 @@ export interface OrdinaryEventDraft {
   characterIds?: string[];
 }
 
-interface OrdinaryEventTemplate extends OrdinaryEventDraft {
-  id: string;
-  scheduleTypes: ScheduleBlockType[];
-}
-
-const ORDINARY_EVENT_TEMPLATES: readonly OrdinaryEventTemplate[] = [
-  {
-    id: "work_waiting_feedback",
-    scheduleTypes: ["work"],
-    type: "work",
-    title: "等反馈的十分钟",
-    description: "手上的修改暂时做完了，反馈还没来，办公室安静了一小会儿。",
-    emotionalImpact: { boredom: 0.02, curiosity: 0.01 },
-    consequences: ["当前工作被短暂搁置，稍后继续确认反馈"],
-    importance: 0.22,
-    sharePotential: 0.2,
-  },
-  {
-    id: "commute_slowdown",
-    scheduleTypes: ["commute"],
-    type: "travel",
-    title: "地铁短暂停车",
-    description: "列车在站间多停了几分钟，车厢里的人一起看了一眼时间。",
-    emotionalImpact: { energy: -0.02, irritation: 0.025 },
-    consequences: ["通勤进度比原计划略晚，需要重新确认下一段日程"],
-    importance: 0.3,
-    sharePotential: 0.28,
-  },
-  {
-    id: "meal_too_salty",
-    scheduleTypes: ["meal"],
-    type: "routine",
-    title: "午饭有点咸",
-    description: "今天这份饭比平时咸了一点，于是多喝了半杯水。",
-    emotionalImpact: { energy: 0.01, irritation: 0.01 },
-    consequences: ["记住这家店今天的口味不太稳定"],
-    importance: 0.16,
-    sharePotential: 0.15,
-  },
-  {
-    id: "street_poster_after_rain",
-    scheduleTypes: ["leisure", "exploration", "errand"],
-    type: "routine",
-    title: "雨后的旧海报",
-    description: "路边一张旧活动海报被雨水泡皱了，颜色反而比原来耐看。",
-    emotionalImpact: { curiosity: 0.025, boredom: -0.02 },
-    consequences: ["留下一个关于城市细节的短暂印象"],
-    importance: 0.24,
-    sharePotential: 0.32,
-  },
-  {
-    id: "room_small_chore",
-    scheduleTypes: ["leisure", "errand", "sleep"],
-    type: "routine",
-    title: "顺手收好了桌面",
-    description: "把散在桌上的线和杯子收了一下，房间没有变漂亮，只是没那么碍眼了。",
-    emotionalImpact: { boredom: -0.015, energy: -0.005 },
-    consequences: ["居住空间恢复到可以安心坐下的状态"],
-    importance: 0.14,
-    sharePotential: 0.12,
-  },
-];
+/** How long a used template stays out of rotation while another one is free. */
+const ORDINARY_TEMPLATE_COOLDOWN_MS = 7 * 24 * 60 * 60_000;
+const ORDINARY_TEMPLATE_CAUSE_PREFIX = "ordinary:template:";
 
 export interface GenerateOrdinaryEventInput {
   companionId: string;
@@ -98,6 +40,34 @@ export interface GenerateOrdinaryEventInput {
 
 function isOrdinaryEvent(event: WorldEvent) {
   return event.idempotencyKey.startsWith("ordinary:");
+}
+
+/**
+ * Templates this tick may draw from: those outside the cooldown, or the one
+ * used longest ago when every template is cooling down.
+ *
+ * Events from the same seed and events after `occurredAt` are ignored so a
+ * replay picks the same template as the original run, whatever has happened
+ * since. The idempotency check then recognizes it as already generated.
+ */
+function freshTemplates(
+  templates: readonly OrdinaryEventTemplate[],
+  input: Pick<GenerateOrdinaryEventInput, "existingEvents" | "occurredAt" | "seed">,
+) {
+  const lastUsedAt = new Map<string, number>();
+  for (const event of input.existingEvents) {
+    if (!isOrdinaryEvent(event) || event.randomSeed === input.seed) continue;
+    if (event.occurredAt > input.occurredAt) continue;
+    if (!event.causeId?.startsWith(ORDINARY_TEMPLATE_CAUSE_PREFIX)) continue;
+    const id = event.causeId.slice(ORDINARY_TEMPLATE_CAUSE_PREFIX.length);
+    lastUsedAt.set(id, Math.max(lastUsedAt.get(id) ?? 0, event.occurredAt.getTime()));
+  }
+  const usedAt = (template: OrdinaryEventTemplate) => lastUsedAt.get(template.id) ?? 0;
+  const cutoff = input.occurredAt.getTime() - ORDINARY_TEMPLATE_COOLDOWN_MS;
+  const fresh = templates.filter((template) => usedAt(template) < cutoff);
+  if (fresh.length > 0) return fresh;
+  const oldest = Math.min(...templates.map(usedAt));
+  return templates.filter((template) => usedAt(template) === oldest);
 }
 
 function ordinaryImpact(impact: Record<string, number>) {
@@ -130,8 +100,11 @@ export function generateOrdinaryWorldEvent(
   if (nonTemplate && today.some((event) => event.causeId === "ordinary:non-template")) {
     return null;
   }
-  const templates = ORDINARY_EVENT_TEMPLATES.filter(
-    (template) => !input.scheduleType || template.scheduleTypes.includes(input.scheduleType),
+  const templates = freshTemplates(
+    ORDINARY_EVENT_TEMPLATES.filter(
+      (template) => !input.scheduleType || template.scheduleTypes.includes(input.scheduleType),
+    ),
+    input,
   );
   const draft = nonTemplate ?? templates[Math.floor(random() * templates.length)];
   if (!draft || !draft.title.trim() || !draft.description.trim()) return null;

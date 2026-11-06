@@ -17,7 +17,8 @@ import {
 import { callJson } from "@/llm/client";
 import { asObject, asString, asStringArray, type JsonObject } from "@/llm/json";
 import { clamp01 } from "@/lib/number";
-import { buildDailySchedule, findScheduleConflicts } from "@/world/planner";
+import { fallbackPlan, fingerprints } from "@/world/fallbackPlan";
+import { decidePlannedCandidate, findScheduleConflicts, localMinute } from "@/world/planner";
 import { createSeededRandom, createWorldSeed } from "@/world/random";
 import type {
   DailyLifePlan,
@@ -156,11 +157,6 @@ const PLAN_SCHEMA: Record<string, unknown> = {
   },
 };
 
-function localMinute(localDate: string, minute: number) {
-  const [year, month, day] = localDate.split("-").map(Number);
-  return new Date(Date.UTC(year!, month! - 1, day!, 0, minute) - 8 * 60 * 60_000);
-}
-
 export function addLocalDays(localDate: string, days: number) {
   const [year, month, day] = localDate.split("-").map(Number);
   return new Date(Date.UTC(year!, month! - 1, day! + days)).toISOString().slice(0, 10);
@@ -269,17 +265,6 @@ function scheduleDomain(
   }));
 }
 
-function fingerprints(events: GeneratedEvent[]) {
-  return events.map((event) =>
-    [
-      event.eventType,
-      event.placeKey,
-      [...event.characterKeys].sort().join("+") || "solo",
-      event.title.replace(/[\s，。！？、]/g, "").slice(0, 12),
-    ].join(":"),
-  );
-}
-
 function overlap(left: string[], right: string[]) {
   const a = new Set(left);
   const b = new Set(right);
@@ -288,7 +273,7 @@ function overlap(left: string[], right: string[]) {
   return hits / Math.max(1, Math.min(a.size, b.size));
 }
 
-function validatePlan(input: {
+export function validatePlan(input: {
   generated: GeneratedDay;
   dayType: DailyPlanDayType;
   weekendMode: WeekendMode | null;
@@ -439,99 +424,6 @@ export function normalizeGeneratedDay(input: {
   } satisfies GeneratedDay;
 }
 
-function fallbackPlan(input: {
-  companionId: string;
-  localDate: string;
-  dayType: DailyPlanDayType;
-  weekendMode: WeekendMode | null;
-  homePlaceId: string;
-  workPlaceId: string;
-  optionalPlaceId?: string;
-  characters: Array<{ stableKey: string; relationshipType: string }>;
-  correlationId: string;
-  samplingSeed: number;
-  notBeforeMinute?: number;
-}) {
-  const at = localMinute(input.localDate, 720);
-  const schedule = buildDailySchedule({
-    companionId: input.companionId,
-    date: at,
-    homeLocationId: input.homePlaceId,
-    workLocationId: input.workPlaceId,
-    optionalLocationId: input.optionalPlaceId,
-    weekendMode: input.weekendMode ?? undefined,
-    dayType: input.dayType,
-    seed: createWorldSeed(String(input.samplingSeed), input.weekendMode ?? input.dayType),
-    correlationId: input.correlationId,
-  });
-  const roommateKeys = input.characters.filter((c) => c.relationshipType === "roommate").map((c) => c.stableKey);
-  const friendKeys = input.characters.filter((c) => c.relationshipType === "friend" || c.relationshipType === "coworker").map((c) => c.stableKey);
-  const random = createSeededRandom(String(input.samplingSeed));
-  const roommate = roommateKeys[Math.floor(random() * roommateKeys.length)] ?? "tang_rui";
-  const friend = friendKeys[Math.floor(random() * friendKeys.length)] ?? "lin_xia";
-  const homeKey = "home";
-  const workKey = "work";
-  const outingKey = input.optionalPlaceId ? "optional" : homeKey;
-  const event = (
-    slot: GeneratedEvent["slot"], eventType: GeneratedEvent["eventType"], title: string,
-    description: string, startMinute: number, placeKey: string, characterKeys: string[],
-    importance: number, innerNarrative: string,
-  ): GeneratedEvent => ({
-    slot, eventType, title, description, startMinute, endMinute: startMinute + 45,
-    placeKey, characterKeys, impacts: [{ dimension: "valence", delta: importance >= 0.65 ? 0.06 : 0.02 }],
-    consequences: ["这件事会进入今天后续的判断"], innerNarrative,
-    loop: { action: importance >= 0.65 ? "create" : "none", topic: title, description, nextAction: "之后看看它有没有后续" },
-    importance, sharePotential: importance >= 0.65 ? 0.72 : 0.32, weight: 0.55,
-  });
-  const workday = input.dayType === "workday";
-  const generatedEvents: GeneratedEvent[] = workday
-    ? [
-        event("required", "work", "项目里出现了一个真正需要判断的问题", "林夏带着一处视觉和实现冲突来找 Mira，两个人没有立刻同意。", 660, workKey, ["lin_xia"], 0.78, "我在意的不是谁说服谁，而是我终于有了自己的技术判断。"),
-        event("required", "social", "晚饭后的室友聊天没有停在寒暄", "回家后和室友聊到各自最近卡住的事情，留下一个还没有答案的话题。", 1230, homeKey, [roommate], 0.7, "别人的生活不是背景板，她说的那句话让我重新看了一眼自己的处境。"),
-        event("required", "travel", "通勤里重新排了一遍今天", "地铁换乘时把今天真正要完成的事情重新排了顺序。", 570, "transit", [], 0.3, "还没到公司，我已经知道哪件事不能再拖。"),
-        event("required", "routine", "午饭没有继续盯着工作", "午饭时短暂离开屏幕，注意到自己上午一直绷着。", 750, workKey, [], 0.28, "停下来以后才发现，身体比脑子更早知道我累了。"),
-      ]
-    : [
-        event("required", "social", "和朋友见面后改变了原来的安排", "见面以后临时换了去处，谈话也从近况转到一个更具体的问题。", 870, outingKey, [friend], 0.78, "计划被改掉没有让我烦，反而像今天终于开始自己生长。"),
-        event("required", "social", "室友之间完成了一件共同的小事", "几个人一起处理了合租生活里拖着没做的事情，顺便聊出新的周末想法。", 1140, homeKey, [roommate], 0.7, "共同生活不是自动发生的，关系藏在这些没人拍照的小事里。"),
-        event("required", "routine", "睡到自然醒以后慢慢收拾", "没有赶时间，先把房间和自己都恢复到舒服的状态。", 630, homeKey, [], 0.3, "空出来的上午不是浪费，它让我重新有自己的节奏。"),
-        event("required", "routine", "在熟悉的城市里换了一条路", "没有追求打卡，只是选了一条平时不会走的路线。", 960, outingKey, [], 0.3, "新鲜感不一定来自远方，有时候只是没有照旧。"),
-      ];
-  generatedEvents.push(
-    event("candidate", "routine", "早餐时发现冰箱里少了一样东西", "原本顺手的早餐被一个小缺口打断。", 510, homeKey, [roommate], 0.24, "小麻烦让我意识到合租生活也有自己的协作节奏。"),
-    event("candidate", workday ? "work" : "social", workday ? "同事临时问了一个接口细节" : "朋友发来一个临时邀约", "事情不大，但需要当下做一个选择。", workday ? 930 : 780, workday ? workKey : homeKey, [friend], 0.38, "我没有立刻顺着别人，而是先问自己今天想不想。"),
-    event("candidate", "routine", "一杯饮料的味道和上次不一样", "很小的感官差异让注意力从屏幕和计划里出来。", 990, workday ? workKey : outingKey, [], 0.2, "这种细节不会改变人生，但会让一天不只是时间表。"),
-    event("candidate", "social", "室友在门口多停了几分钟", "一句原本随口的话变成了短短的认真交流。", 1290, homeKey, [roommate], 0.42, "我差点把它当成闲聊，但她其实在试着告诉我一件重要的事。"),
-    event("candidate", "thought", "一个旧问题换了新的问法", "今天的经历让一个开放问题出现了更具体的角度。", 1320, homeKey, [], 0.36, "答案还没有，但问题终于不再只是抽象句子。"),
-    event("candidate", "routine", "睡前决定不再继续刷屏", "在疲惫变成烦躁前停下来，给明天留一点余量。", 1365, homeKey, [], 0.22, "结束一天也是一种主动选择。"),
-  );
-  if (input.notBeforeMinute !== undefined) {
-    const first = Math.ceil(Math.max(input.notBeforeMinute, 570) / 15) * 15;
-    const last = 1365;
-    const step = Math.max(15, Math.floor((last - first) / Math.max(1, generatedEvents.length - 1) / 15) * 15);
-    generatedEvents.forEach((item, index) => {
-      item.startMinute = Math.min(last, first + index * step);
-      item.endMinute = Math.min(1440, item.startMinute + 30);
-    });
-  }
-  const placeKeyById = new Map([[input.homePlaceId, "home"], [input.workPlaceId, "work"]]);
-  if (input.optionalPlaceId) placeKeyById.set(input.optionalPlaceId, "optional");
-  const generated: GeneratedDay = {
-    theme: workday ? "在工作判断与合租生活之间找回自己的节奏" : "让周末在朋友、城市和独处之间自然展开",
-    summary: workday ? "正常上班，也让下班后的生活继续发生。" : "不追求打卡，让真实关系和临时变化推动这一天。",
-    weekendMode: input.weekendMode,
-    schedule: schedule.map((block) => ({
-      title: block.title,
-      type: block.type,
-      startMinute: Math.round((block.startAt.getTime() - localMinute(input.localDate, 0).getTime()) / 60_000),
-      endMinute: Math.round((block.endAt.getTime() - localMinute(input.localDate, 0).getTime()) / 60_000),
-      placeKey: block.locationId ? (placeKeyById.get(block.locationId) ?? "home") : "transit",
-    })),
-    events: generatedEvents,
-  };
-  return { generated, schedule, fingerprints: fingerprints(generatedEvents) };
-}
-
 function stateFromRow(row: typeof companionStates.$inferSelect): CompanionState {
   return {
     traits: row.traitsJson,
@@ -608,10 +500,11 @@ export async function generateDailyLifePlan(
   const normalizedNotBeforeMinute = notBeforeMinute === undefined
     ? undefined
     : Math.floor(notBeforeMinute / 100) * 60 + notBeforeMinute % 100;
+  const fallbackSeed = samplingSeed;
   const fallback = fallbackPlan({
     companionId, localDate, dayType, weekendMode, homePlaceId: home.id, workPlaceId: work.id,
-    optionalPlaceId: optional?.id, characters, correlationId, samplingSeed,
-    notBeforeMinute: normalizedNotBeforeMinute,
+    optionalPlaceId: optional?.id, characters, correlationId, samplingSeed: fallbackSeed,
+    notBeforeMinute: normalizedNotBeforeMinute, recentPlans,
   });
   const state = stateFromRow(stateRow);
   const promptContext = {
@@ -722,6 +615,9 @@ export async function generateDailyLifePlan(
       validationErrors = validation.errors;
     }
   }
+  // Attempt 2 draws a new model seed. A fallback row must keep the seed that
+  // actually selected its content, or the day could not be replayed from it.
+  if (status === "fallback") samplingSeed = fallbackSeed;
 
   const inserted = await db.transaction(async (tx) => {
     const [plan] = await tx.insert(dailyLifePlans).values({
@@ -873,19 +769,19 @@ export async function selectPlannedEventForTick(input: {
     ));
   const occurred = candidateStatuses.filter((row) => row.status === "occurred").length;
   const remaining = candidateStatuses.filter((row) => row.status === "planned").length;
-  const needed = Math.max(0, 2 - occurred);
-  const force = remaining <= needed;
   const localHour = Number(new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Shanghai", hour: "2-digit", hourCycle: "h23",
   }).format(input.occurredAt));
-  const probability = Math.min(
-    0.92,
-    0.18 + event.weight * 0.4 + input.drives.noveltySeeking * 0.22 +
-      input.mood.boredom * 0.12 + (localHour >= 18 ? 0.12 : 0),
-  );
-  const selected = occurred < 4 && (force || createSeededRandom(createWorldSeed(
-    String(plan.samplingSeed), event.id, "candidate-selection",
-  ))() < probability);
+  const { selected, force, probability } = decidePlannedCandidate({
+    samplingSeed: plan.samplingSeed,
+    eventId: event.id,
+    weight: event.weight,
+    occurred,
+    remaining,
+    noveltySeeking: input.drives.noveltySeeking,
+    boredom: input.mood.boredom,
+    localHour,
+  });
   if (!selected) {
     return {
       event: { ...event, status: "skipped" as const, selectionReason: occurred >= 4 ? "candidate_daily_cap" : `probability_rejected:${probability.toFixed(3)}` },

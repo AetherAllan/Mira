@@ -60,6 +60,8 @@ Schedule intervals are half-open: `startAt <= now < endAt`. World state is fresh
 
 Weekday/weekend templates provide routine. Open loops and recent facts can propose adjustments; a seeded optional block provides bounded variation. Every change records `source`, `changeReason` and `correlationId`.
 
+When the planning model is unavailable, `world/fallbackPlan.ts` builds the whole day without it. Each event slot and the theme draw from a pool in `world/fallbackPlanContent.ts`, skipping anything used in the last seven plans. `samplingSeed` and the recent plans fully determine the result, and a fallback row stores the seed that chose its content. `bun run simulate:world` runs 30 days on this path with the production candidate rule, so `distinctEventTitles` and `replayDigest` track the content itself.
+
 Provider calls are never made inside a database transaction.
 
 Open-Meteo facts are short lived. Rain, snow or thunderstorms can replace a future outdoor block with the nearest feasible indoor known place, but only within 12 hours. The physical weather event, schedule change and audit state change commit together and share an idempotency key.
